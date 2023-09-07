@@ -9,7 +9,7 @@ batch 512 w/o adv obtained from https://arxiv.org/pdf/2104.08821.pdf
 The performance strongly based on the batch size, so increasing the batch size will definitely go over SIMCSE accuracy. Only increasing 40 batch size increased average performance +0.5 as show below comparing Batch 100 with adv and Batch 60 with adv
 
 
-$Loss = contrastive loss+ weight \times adversarial loss $
+$Loss = contrastive \ loss+ weight \times adversarial \ loss $
 
 contrastive loss is computed as following NTX Loss with one postive pair and negative pair
 Adversarial loss is computed by applying smoothness inducing adversarial regularizaation with adding pertubation to the embeddings.  https://arxiv.org/pdf/1911.03437v5.pdf 
