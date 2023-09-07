@@ -12,6 +12,7 @@ The performance strongly based on the batch size, so increasing the batch size w
 $Loss = contrastive \ loss+ weight \times adversarial \ loss $
 
 contrastive loss is computed as following NTX Loss with one postive pair and negative pair
+
 Adversarial loss is computed by applying smoothness inducing adversarial regularizaation with adding pertubation to the embeddings.  https://arxiv.org/pdf/1911.03437v5.pdf 
 
 | Configuration       | Test STSB | Test SICK | STS12  | STS13  | STS14  | STS15  | STS16  | AVG    | Best STSB |
@@ -26,9 +27,13 @@ Adversarial loss is computed by applying smoothness inducing adversarial regular
 To obtain the result
 
 Git clone the simcse repository to use senteval and datasets.
+
 git clone https://github.com/princeton-nlp/SimCSE.git
+
 Run this commands to download train and eval datasets
+
 bash /content/SimCSE/SentEval/data/downstream/download_dataset.sh
+
 bash /content/SimCSE/data/download_nli.sh
 
 Lastly
