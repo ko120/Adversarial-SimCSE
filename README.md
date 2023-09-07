@@ -21,3 +21,17 @@ Adversarial loss is computed by applying smoothness inducing adversarial regular
 | Batch 100 with adv  | 0.8706    | 0.8078    | 0.7513 | 0.8515 | 0.8083 | 0.8613 | 0.8215 | 0.8246 | 0.8706    |
 | Batch 60 with adv   | 0.8649    | 0.7786    | 0.7591 | 0.8466 | 0.8056 | 0.8617 | 0.8248 | 0.8202 | 0.8649    |
 | Batch 60 w/o adv    | 0.8543    | 0.7737    | 0.7431 | 0.8091 | 0.7732 | 0.833  | 0.8004 | 0.7981 | 0.8543    |
+
+
+
+To obtain the result
+
+Git clone the simcse repository to use senteval and datasets.
+git clone https://github.com/princeton-nlp/SimCSE.git
+Run this commands to download train and eval datasets
+bash /content/SimCSE/SentEval/data/downstream/download_dataset.sh
+bash /content/SimCSE/data/download_nli.sh
+
+Lastly
+
+python train.py
