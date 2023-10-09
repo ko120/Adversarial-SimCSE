@@ -322,7 +322,9 @@ def cl_forward(cls,
     #   #paded_emb = torch.cat([out_emb,padding_tensor],dim=0)
     #   loss_adv = cls.smart_loss(out_emb,z1[:out_emb.size(0),:])
     loss_adv = cls.smart_loss(outputs.last_hidden_state[:z1.size(0),0],z1)
-    loss = loss_fct(cos_sim, labels) + loss_adv*0.5
+    alpha = 0.1
+    loss = loss_fct(cos_sim, labels) + loss_adv*alpha
+    wandb.log({"adv weight":alpha}, step=trainer.global_step)
 
 
     # Calculate loss for MLM
