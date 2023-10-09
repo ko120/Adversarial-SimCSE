@@ -15,6 +15,104 @@ from transformers.file_utils import (
     replace_return_docstrings,
 )
 from transformers.modeling_outputs import SequenceClassifierOutput, BaseModelOutputWithPoolingAndCrossAttentions
+from typing import Union, Callable
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch import Tensor
+from itertools import count
+import pdb
+
+
+def exists(val):
+    return val is not None
+
+def default(val, d):
+    if exists(val):
+        return val
+    return d
+
+def inf_norm(x):
+    return torch.norm(x, p=float('inf'), dim=-1, keepdim=True)
+import torch.nn.functional as F
+
+def kl_loss(input, target, reduction='batchmean'):
+    return F.kl_div(
+        F.log_softmax(input, dim=-1),
+        F.softmax(target, dim=-1),
+        reduction=reduction,
+    )
+
+def sym_kl_loss(input, target, reduction='sum', alpha=1.0):
+    return alpha * F.kl_div(
+        F.log_softmax(input, dim=-1),
+        F.softmax(target.detach(), dim=-1),
+        reduction=reduction,
+    ) + F.kl_div(
+        F.log_softmax(target, dim=-1),
+        F.softmax(input.detach(), dim=-1),
+        reduction=reduction,
+    )
+
+def js_loss(input, target, reduction='sum', alpha=1.0):
+    mean_proba = 0.5 * (F.softmax(input.detach(), dim=-1) + F.softmax(target.detach(), dim=-1))
+    return alpha * (F.kl_div(
+        F.log_softmax(input, dim=-1),
+        mean_proba,
+        reduction=reduction
+    ) + F.kl_div(
+        F.log_softmax(target, dim=-1),
+        mean_proba,
+        reduction=reduction
+    ))
+class SMARTLoss(nn.Module):
+
+    def __init__(
+        self,
+        eval_fn: Callable,
+        loss_fn: Callable,
+        loss_last_fn: Callable = None,
+        norm_fn: Callable = inf_norm,
+        num_steps: int = 1,
+        step_size: float = 1e-3,
+        epsilon: float = 1e-6,
+        noise_var: float = 1e-5
+    ) -> None:
+        super().__init__()
+        self.eval_fn = eval_fn
+        self.loss_fn = loss_fn
+        self.loss_last_fn = default(loss_last_fn, loss_fn)
+        self.norm_fn = norm_fn
+        self.num_steps = num_steps
+        self.step_size = step_size
+        self.epsilon = epsilon
+        self.noise_var = noise_var
+
+    def forward(self, embed: Tensor, state: Tensor) -> Tensor:
+        noise = torch.randn_like(embed, requires_grad=True) * self.noise_var
+
+        # Indefinite loop with counter
+        for i in count():
+            # Compute perturbed embed and states
+            embed_perturbed = embed + noise
+            state_perturbed = self.eval_fn(outputs=embed_perturbed,attention_mask =None,smart=True)
+
+            # Return final loss if last step (undetached state)
+            if i == self.num_steps:
+                return self.loss_last_fn(state_perturbed, state)
+            # Compute perturbation loss (detached state)
+            loss = self.loss_fn(state_perturbed, state.detach())
+            # Compute noise gradient ∂loss/∂noise
+            noise_gradient, = torch.autograd.grad(loss, noise)
+            # Move noise towards gradient to change state as much as possible
+            step = noise + self.step_size * noise_gradient
+            # Normalize new noise step into norm induced ball
+            step_norm = self.norm_fn(step)
+            noise = step / (step_norm + self.epsilon)
+            # Reset noise gradients for next step
+            noise = noise.detach().requires_grad_()
+
 
 class MLPLayer(nn.Module):
     """
@@ -55,18 +153,23 @@ class Pooler(nn.Module):
     'avg_top2': average of the last two layers.
     'avg_first_last': average of the first and the last layers.
     """
-    def __init__(self, pooler_type):
+    def __init__(self, pooler_type,config):
         super().__init__()
         self.pooler_type = pooler_type
         assert self.pooler_type in ["cls", "cls_before_pooler", "avg", "avg_top2", "avg_first_last"], "unrecognized pooling type %s" % self.pooler_type
+        self.mlp = MLPLayer(config)
+    def forward(self, attention_mask, outputs,smart=False):
+        if smart:
+          last_hidden = self.mlp(outputs)
+        else:
+          last_hidden = outputs.last_hidden_state[:, 0]
+          pooler_output = outputs.pooler_output
+          hidden_states = outputs.hidden_states
 
-    def forward(self, attention_mask, outputs):
-        last_hidden = outputs.last_hidden_state
-        pooler_output = outputs.pooler_output
-        hidden_states = outputs.hidden_states
+
 
         if self.pooler_type in ['cls_before_pooler', 'cls']:
-            return last_hidden[:, 0]
+            return last_hidden
         elif self.pooler_type == "avg":
             return ((last_hidden * attention_mask.unsqueeze(-1)).sum(1) / attention_mask.sum(-1).unsqueeze(-1))
         elif self.pooler_type == "avg_first_last":
@@ -88,11 +191,12 @@ def cl_init(cls, config):
     Contrastive learning class init function.
     """
     cls.pooler_type = cls.model_args.pooler_type
-    cls.pooler = Pooler(cls.model_args.pooler_type)
+    cls.pooler = Pooler(cls.model_args.pooler_type,config)
     if cls.model_args.pooler_type == "cls":
         cls.mlp = MLPLayer(config)
     cls.sim = Similarity(temp=cls.model_args.temp)
     cls.init_weights()
+    cls.smart_loss = SMARTLoss(eval_fn= cls.pooler, loss_fn = kl_loss, loss_last_fn = sym_kl_loss)
 
 def cl_forward(cls,
     encoder,
@@ -200,6 +304,7 @@ def cl_forward(cls,
     labels = torch.arange(cos_sim.size(0)).long().to(cls.device)
     loss_fct = nn.CrossEntropyLoss()
 
+
     # Calculate loss with hard negatives
     if num_sent == 3:
         # Note that weights are actually logits of weights
@@ -209,7 +314,16 @@ def cl_forward(cls,
         ).to(cls.device)
         cos_sim = cos_sim + weights
 
-    loss = loss_fct(cos_sim, labels)
+    # if outputs.last_hidden_state[:z1.size(0),0].shape == z1.shape:
+    #   loss_adv = cls.smart_loss(outputs.last_hidden_state[:z1.size(0),0],z1)
+    # else:
+    #   out_emb =outputs.last_hidden_state[:,0]
+    #   #padding_tensor = torch.ones(z1.size(0)-out_emb.size(0), out_emb.size(1)).to(cls.device)
+    #   #paded_emb = torch.cat([out_emb,padding_tensor],dim=0)
+    #   loss_adv = cls.smart_loss(out_emb,z1[:out_emb.size(0),:])
+    loss_adv = cls.smart_loss(outputs.last_hidden_state[:z1.size(0),0],z1)
+    loss = loss_fct(cos_sim, labels) + loss_adv*0.5
+
 
     # Calculate loss for MLM
     if mlm_outputs is not None and mlm_labels is not None:
