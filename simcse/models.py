@@ -76,7 +76,7 @@ class SMARTLoss(nn.Module):
         norm_fn: Callable = inf_norm,
         num_steps: int = 1,
         step_size: float = 1e-3,
-        epsilon: float = 1e-6,
+        epsilon: float = 1e-5,
         noise_var: float = 1e-5
     ) -> None:
         super().__init__()
