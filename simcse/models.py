@@ -37,23 +37,62 @@ def inf_norm(x):
     return torch.norm(x, p=float('inf'), dim=-1, keepdim=True)
 import torch.nn.functional as F
 
-def kl_loss(input, target, reduction='batchmean'):
-    return F.kl_div(
-        F.log_softmax(input, dim=-1),
-        F.softmax(target, dim=-1),
-        reduction=reduction,
-    )
+def stable_kl(logit, target, epsilon=1e-6, reduce=False):
+    logit = logit.view(-1, logit.size(-1)).float()
+    target = target.view(-1, target.size(-1)).float()
+    bs = logit.size(0)
+    p = F.log_softmax(logit, 1).exp()
+    y = F.log_softmax(target, 1).exp()
+    rp = -(1.0 / (p + epsilon) - 1 + epsilon).detach().log()
+    ry = -(1.0 / (y + epsilon) - 1 + epsilon).detach().log()
+    if reduce:
+        return (p * (rp - ry) * 2).sum() / bs
+    else:
+        return (p * (rp - ry) * 2).sum()
+
 
 def sym_kl_loss(input, target, reduction='sum', alpha=1.0):
-    return alpha * F.kl_div(
-        F.log_softmax(input, dim=-1),
-        F.softmax(target.detach(), dim=-1),
-        reduction=reduction,
-    ) + F.kl_div(
-        F.log_softmax(target, dim=-1),
-        F.softmax(input.detach(), dim=-1),
-        reduction=reduction,
-    )
+
+  """input/target: logits"""
+  input = input.float()
+  target = target.float()
+  loss = F.kl_div(
+      F.log_softmax(input, dim=-1, dtype=torch.float32),
+      F.softmax(target.detach(), dim=-1, dtype=torch.float32),
+      reduction=reduction,
+  ) + F.kl_div(
+      F.log_softmax(target, dim=-1, dtype=torch.float32),
+      F.softmax(input.detach(), dim=-1, dtype=torch.float32),
+      reduction=reduction,
+  )
+  loss = loss 
+  return loss
+
+def _norm_grad(grad, eff_grad=None, sentence_level=False):
+    norm_p = "inf"
+    epsilon = 1e-6
+    if norm_p == "l2":
+        if sentence_level:
+            direction = grad / (
+                torch.norm(grad, dim=(-2, -1), keepdim=True) + epsilon
+            )
+        else:
+            direction = grad / (
+                torch.norm(grad, dim=-1, keepdim=True) + epsilon
+            )
+    elif norm_p == "l1":
+        direction = grad.sign()
+    else:
+        if sentence_level:
+            direction = grad / (
+                grad.abs().max((-2, -1), keepdim=True)[0] + epsilon
+            )
+        else:
+            direction = grad / (grad.abs().max(-1, keepdim=True)[0] + epsilon)
+            eff_direction = eff_grad / (
+                grad.abs().max(-1, keepdim=True)[0] + epsilon
+            )
+    return direction, eff_direction  
 
 def js_loss(input, target, reduction='sum', alpha=1.0):
     mean_proba = 0.5 * (F.softmax(input.detach(), dim=-1) + F.softmax(target.detach(), dim=-1))
@@ -66,6 +105,7 @@ def js_loss(input, target, reduction='sum', alpha=1.0):
         mean_proba,
         reduction=reduction
     ))
+
 class SMARTLoss(nn.Module):
 
     def __init__(
@@ -76,7 +116,7 @@ class SMARTLoss(nn.Module):
         norm_fn: Callable = inf_norm,
         num_steps: int = 1,
         step_size: float = 1e-3,
-        epsilon: float = 1e-5,
+        epsilon: float = 1e-6,
         noise_var: float = 1e-5
     ) -> None:
         super().__init__()
@@ -96,6 +136,7 @@ class SMARTLoss(nn.Module):
         for i in count():
             # Compute perturbed embed and states
             embed_perturbed = embed + noise
+           
             state_perturbed = self.eval_fn(outputs=embed_perturbed,attention_mask =None,smart=True)
 
             # Return final loss if last step (undetached state)
@@ -104,12 +145,17 @@ class SMARTLoss(nn.Module):
             # Compute perturbation loss (detached state)
             loss = self.loss_fn(state_perturbed, state.detach())
             # Compute noise gradient ∂loss/∂noise
-            noise_gradient, = torch.autograd.grad(loss, noise)
+            noise_gradient, = torch.autograd.grad(loss, noise, only_inputs=True, retain_graph=False)
+            norm = noise_gradient.norm()
+            if torch.isnan(norm) or torch.isinf(norm):
+                return 0
             # Move noise towards gradient to change state as much as possible
-            step = noise + self.step_size * noise_gradient
+            eff_delta_grad = noise_gradient * self.step_size
+            noise_gradient= noise + self.step_size * noise_gradient
             # Normalize new noise step into norm induced ball
-            step_norm = self.norm_fn(step)
-            noise = step / (step_norm + self.epsilon)
+            noise,_ = _norm_grad(grad=noise_gradient,eff_grad = eff_delta_grad)
+            
+            
             # Reset noise gradients for next step
             noise = noise.detach().requires_grad_()
 
@@ -196,7 +242,7 @@ def cl_init(cls, config):
         cls.mlp = MLPLayer(config)
     cls.sim = Similarity(temp=cls.model_args.temp)
     cls.init_weights()
-    cls.smart_loss = SMARTLoss(eval_fn= cls.pooler, loss_fn = kl_loss, loss_last_fn = sym_kl_loss)
+    cls.smart_loss = SMARTLoss(eval_fn= cls.pooler, loss_fn = stable_kl, loss_last_fn= sym_kl_loss)
 
 def cl_forward(cls,
     encoder,
@@ -219,19 +265,32 @@ def cl_forward(cls,
     # Number of sentences in one instance
     # 2: pair instance; 3: pair instance with a hard negative
     num_sent = input_ids.size(1)
-
+    
     mlm_outputs = None
     # Flatten input for encoding
     input_ids = input_ids.view((-1, input_ids.size(-1))) # (bs * num_sent, len)
     attention_mask = attention_mask.view((-1, attention_mask.size(-1))) # (bs * num_sent len)
     if token_type_ids is not None:
         token_type_ids = token_type_ids.view((-1, token_type_ids.size(-1))) # (bs * num_sent, len)
-
+        first_token = token_type_ids[:ori_input_ids.size(0),:]
+    first_ids = input_ids[:ori_input_ids.size(0),:]
+    first_att = attention_mask[:ori_input_ids.size(0),:]
     # Get raw embeddings
     outputs = encoder(
         input_ids,
         attention_mask=attention_mask,
         token_type_ids=token_type_ids,
+        position_ids=position_ids,
+        head_mask=head_mask,
+        inputs_embeds=inputs_embeds,
+        output_attentions=output_attentions,
+        output_hidden_states=True if cls.model_args.pooler_type in ['avg_top2', 'avg_first_last'] else False,
+        return_dict=True,
+    )
+    first_output= encoder(
+        first_ids,
+        attention_mask=first_att,
+        token_type_ids=first_token,
         position_ids=position_ids,
         head_mask=head_mask,
         inputs_embeds=inputs_embeds,
@@ -321,10 +380,10 @@ def cl_forward(cls,
     #   #padding_tensor = torch.ones(z1.size(0)-out_emb.size(0), out_emb.size(1)).to(cls.device)
     #   #paded_emb = torch.cat([out_emb,padding_tensor],dim=0)
     #   loss_adv = cls.smart_loss(out_emb,z1[:out_emb.size(0),:])
-    loss_adv = cls.smart_loss(outputs.last_hidden_state[:z1.size(0),0],z1)
-    alpha = 0.1
+    pdb.set_trace()
+    loss_adv = cls.smart_loss(first_output.last_hidden_state[:,0],z1)
+    alpha = 1
     loss = loss_fct(cos_sim, labels) + loss_adv*alpha
-    wandb.log({"adv weight":alpha}, step=trainer.global_step)
 
 
     # Calculate loss for MLM
