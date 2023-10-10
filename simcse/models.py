@@ -380,7 +380,7 @@ def cl_forward(cls,
     #   #padding_tensor = torch.ones(z1.size(0)-out_emb.size(0), out_emb.size(1)).to(cls.device)
     #   #paded_emb = torch.cat([out_emb,padding_tensor],dim=0)
     #   loss_adv = cls.smart_loss(out_emb,z1[:out_emb.size(0),:])
-    pdb.set_trace()
+
     loss_adv = cls.smart_loss(first_output.last_hidden_state[:,0],z1)
     alpha = 1
     loss = loss_fct(cos_sim, labels) + loss_adv*alpha
