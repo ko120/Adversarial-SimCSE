@@ -563,17 +563,17 @@ def main():
 
     # Evaluation
     results = {}
-    # if training_args.do_eval:
-    #     logger.info("*** Evaluate ***")
-    #     results = trainer.evaluate(eval_senteval_transfer=True)
+     if training_args.do_eval:
+         logger.info("*** Evaluate ***")
+         results = trainer.evaluate(eval_senteval_transfer=True)
 
-    #     output_eval_file = os.path.join(training_args.output_dir, "eval_results.txt")
-    #     if trainer.is_world_process_zero():
-    #         with open(output_eval_file, "w") as writer:
-    #             logger.info("***** Eval results *****")
-    #             for key, value in sorted(results.items()):
-    #                 logger.info(f"  {key} = {value}")
-    #                 writer.write(f"{key} = {value}\n")
+         output_eval_file = os.path.join(training_args.output_dir, "eval_results.txt")
+         if trainer.is_world_process_zero():
+             with open(output_eval_file, "w") as writer:
+                 logger.info("***** Eval results *****")
+                 for key, value in sorted(results.items()):
+                     logger.info(f"  {key} = {value}")
+                     writer.write(f"{key} = {value}\n")
 
     os.system(f'python3.7 evaluation.py \
     --model_name_or_path /content/Adversarial-SimCSE/result/my-sup-simcse-bert-base-uncased \
