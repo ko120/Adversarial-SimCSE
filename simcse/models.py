@@ -65,7 +65,7 @@ def sym_kl_loss(input, target, reduction='sum', alpha=1.0):
       F.softmax(input.detach(), dim=-1, dtype=torch.float32),
       reduction=reduction,
   )
-  loss = loss 
+  loss = loss
   return loss
 
 def _norm_grad(grad, eff_grad=None, sentence_level=False):
@@ -92,7 +92,7 @@ def _norm_grad(grad, eff_grad=None, sentence_level=False):
             eff_direction = eff_grad / (
                 grad.abs().max(-1, keepdim=True)[0] + epsilon
             )
-    return direction, eff_direction  
+    return direction, eff_direction
 
 def js_loss(input, target, reduction='sum', alpha=1.0):
     mean_proba = 0.5 * (F.softmax(input.detach(), dim=-1) + F.softmax(target.detach(), dim=-1))
@@ -136,7 +136,7 @@ class SMARTLoss(nn.Module):
         for i in count():
             # Compute perturbed embed and states
             embed_perturbed = embed + noise
-           
+
             state_perturbed = self.eval_fn(outputs=embed_perturbed,attention_mask =None,smart=True)
 
             # Return final loss if last step (undetached state)
@@ -154,8 +154,8 @@ class SMARTLoss(nn.Module):
             noise_gradient= noise + self.step_size * noise_gradient
             # Normalize new noise step into norm induced ball
             noise,_ = _norm_grad(grad=noise_gradient,eff_grad = eff_delta_grad)
-            
-            
+
+
             # Reset noise gradients for next step
             noise = noise.detach().requires_grad_()
 
@@ -265,16 +265,19 @@ def cl_forward(cls,
     # Number of sentences in one instance
     # 2: pair instance; 3: pair instance with a hard negative
     num_sent = input_ids.size(1)
-    
+
     mlm_outputs = None
+    # first_sentence_input_ids = input_ids[:, 0, :]
+    # first_sentence_attention_mask = attention_mask[:, 0, :]
+
     # Flatten input for encoding
     input_ids = input_ids.view((-1, input_ids.size(-1))) # (bs * num_sent, len)
     attention_mask = attention_mask.view((-1, attention_mask.size(-1))) # (bs * num_sent len)
     if token_type_ids is not None:
+        # first_token = token_type_ids[:,0,:]
         token_type_ids = token_type_ids.view((-1, token_type_ids.size(-1))) # (bs * num_sent, len)
-        first_token = token_type_ids[:ori_input_ids.size(0),:]
-    first_ids = input_ids[:ori_input_ids.size(0),:]
-    first_att = attention_mask[:ori_input_ids.size(0),:]
+
+
     # Get raw embeddings
     outputs = encoder(
         input_ids,
@@ -287,17 +290,17 @@ def cl_forward(cls,
         output_hidden_states=True if cls.model_args.pooler_type in ['avg_top2', 'avg_first_last'] else False,
         return_dict=True,
     )
-    first_output= encoder(
-        first_ids,
-        attention_mask=first_att,
-        token_type_ids=first_token,
-        position_ids=position_ids,
-        head_mask=head_mask,
-        inputs_embeds=inputs_embeds,
-        output_attentions=output_attentions,
-        output_hidden_states=True if cls.model_args.pooler_type in ['avg_top2', 'avg_first_last'] else False,
-        return_dict=True,
-    )
+    # first_output= encoder(
+    #     first_sentence_input_ids,
+    #     attention_mask=first_sentence_attention_mask,
+    #     token_type_ids=first_token,
+    #     position_ids=position_ids,
+    #     head_mask=head_mask,
+    #     inputs_embeds=inputs_embeds,
+    #     output_attentions=output_attentions,
+    #     output_hidden_states=True if cls.model_args.pooler_type in ['avg_top2', 'avg_first_last'] else False,
+    #     return_dict=True,
+    # )
 
     # MLM auxiliary objective
     if mlm_input_ids is not None:
@@ -381,9 +384,11 @@ def cl_forward(cls,
     #   #paded_emb = torch.cat([out_emb,padding_tensor],dim=0)
     #   loss_adv = cls.smart_loss(out_emb,z1[:out_emb.size(0),:])
 
-    loss_adv = cls.smart_loss(first_output.last_hidden_state[:,0],z1)
+    loss_adv = cls.smart_loss(outputs.last_hidden_state[:z1.size(0),0,:],z1)
+    loss_adv_3 = cls.smart_loss(outputs.last_hidden_state[(z3.size(0)*2):,0,:],z3)
     alpha = 1
-    loss = loss_fct(cos_sim, labels) + loss_adv*alpha
+    loss_cont = loss_fct(cos_sim, labels)
+    loss = loss_cont + loss_adv*(loss_cont.item()/loss_adv.item())
 
 
     # Calculate loss for MLM
