@@ -130,17 +130,16 @@ class SMARTLoss(nn.Module):
         self.noise_var = noise_var
 
     def forward(self, embed: Tensor, state: Tensor) -> Tensor:
+        self.eval_fn.eval()
         noise = torch.randn_like(embed, requires_grad=True) * self.noise_var
-
         # Indefinite loop with counter
         for i in count():
             # Compute perturbed embed and states
             embed_perturbed = embed + noise
-
-            state_perturbed = self.eval_fn(outputs=embed_perturbed,attention_mask =None,smart=True)
-
+            state_perturbed = self.eval_fn(embed_perturbed)
             # Return final loss if last step (undetached state)
             if i == self.num_steps:
+                self.eval_fn.train()
                 return self.loss_last_fn(state_perturbed, state)
             # Compute perturbation loss (detached state)
             loss = self.loss_fn(state_perturbed, state.detach())
@@ -154,7 +153,6 @@ class SMARTLoss(nn.Module):
             noise_gradient= noise + self.step_size * noise_gradient
             # Normalize new noise step into norm induced ball
             noise,_ = _norm_grad(grad=noise_gradient,eff_grad = eff_delta_grad)
-
 
             # Reset noise gradients for next step
             noise = noise.detach().requires_grad_()
@@ -204,18 +202,16 @@ class Pooler(nn.Module):
         self.pooler_type = pooler_type
         assert self.pooler_type in ["cls", "cls_before_pooler", "avg", "avg_top2", "avg_first_last"], "unrecognized pooling type %s" % self.pooler_type
         self.mlp = MLPLayer(config)
-    def forward(self, attention_mask, outputs,smart=False):
-        if smart:
-          last_hidden = self.mlp(outputs)
-        else:
-          last_hidden = outputs.last_hidden_state[:, 0]
-          pooler_output = outputs.pooler_output
-          hidden_states = outputs.hidden_states
+    def forward(self, attention_mask, outputs):
+        
+        last_hidden = outputs.last_hidden_state
+        pooler_output = outputs.pooler_output
+        hidden_states = outputs.hidden_states
 
 
 
         if self.pooler_type in ['cls_before_pooler', 'cls']:
-            return last_hidden
+            return last_hidden[:, 0]
         elif self.pooler_type == "avg":
             return ((last_hidden * attention_mask.unsqueeze(-1)).sum(1) / attention_mask.sum(-1).unsqueeze(-1))
         elif self.pooler_type == "avg_first_last":
@@ -242,7 +238,7 @@ def cl_init(cls, config):
         cls.mlp = MLPLayer(config)
     cls.sim = Similarity(temp=cls.model_args.temp)
     cls.init_weights()
-    cls.smart_loss = SMARTLoss(eval_fn= cls.pooler, loss_fn = stable_kl, loss_last_fn= sym_kl_loss)
+    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp, loss_fn = stable_kl, loss_last_fn= sym_kl_loss)
 
 def cl_forward(cls,
     encoder,
@@ -385,10 +381,10 @@ def cl_forward(cls,
     #   loss_adv = cls.smart_loss(out_emb,z1[:out_emb.size(0),:])
 
     loss_adv = cls.smart_loss(outputs.last_hidden_state[:z1.size(0),0,:],z1)
-    loss_adv_3 = cls.smart_loss(outputs.last_hidden_state[(z3.size(0)*2):,0,:],z3)
+    
     alpha = 1
     loss_cont = loss_fct(cos_sim, labels)
-    loss = loss_cont + loss_adv*(loss_cont.item()/loss_adv.item())
+    loss = loss_cont + alpha*loss_adv*(loss_cont.item()/loss_adv.item())
 
 
     # Calculate loss for MLM
