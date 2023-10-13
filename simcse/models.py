@@ -130,7 +130,7 @@ class SMARTLoss(nn.Module):
         self.noise_var = noise_var
 
     def forward(self, embed: Tensor, state: Tensor) -> Tensor:
-        self.eval_fn.eval()
+        
         noise = torch.randn_like(embed, requires_grad=True) * self.noise_var
         # Indefinite loop with counter
         for i in count():
@@ -238,7 +238,7 @@ def cl_init(cls, config):
         cls.mlp = MLPLayer(config)
     cls.sim = Similarity(temp=cls.model_args.temp)
     cls.init_weights()
-    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp, loss_fn = stable_kl, loss_last_fn= sym_kl_loss)
+    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp, loss_fn = torch.nn.MSELoss(reduction='mean))
 
 def cl_forward(cls,
     encoder,
