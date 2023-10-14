@@ -139,8 +139,7 @@ class SMARTLoss(nn.Module):
             state_perturbed = self.eval_fn(embed_perturbed)
             # Return final loss if last step (undetached state)
             if i == self.num_steps:
-                self.eval_fn.train()
-                return self.loss_last_fn(state_perturbed, state)
+                return self.loss_last_fn(state, state_perturbed)
             # Compute perturbation loss (detached state)
             loss = self.loss_fn(state_perturbed, state.detach())
             # Compute noise gradient ∂loss/∂noise
@@ -238,7 +237,7 @@ def cl_init(cls, config):
         cls.mlp = MLPLayer(config)
     cls.sim = Similarity(temp=cls.model_args.temp)
     cls.init_weights()
-    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp, loss_fn = torch.nn.MSELoss(reduction='mean'))
+    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp, loss_fn = torch.nn.CrossEntropyLoss(ignore_index=-1)
 
 def cl_forward(cls,
     encoder,
