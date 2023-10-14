@@ -134,6 +134,7 @@ class SMARTLoss(nn.Module):
         noise = torch.randn_like(embed, requires_grad=True) * self.noise_var
         # Indefinite loop with counter
         for i in count():
+            pdb.set_trace()
             # Compute perturbed embed and states
             embed_perturbed = embed + noise
             state_perturbed = self.eval_fn(embed_perturbed)
@@ -237,7 +238,7 @@ def cl_init(cls, config):
         cls.mlp = MLPLayer(config)
     cls.sim = Similarity(temp=cls.model_args.temp)
     cls.init_weights()
-    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp, loss_fn = torch.nn.CrossEntropyLoss(ignore_index=-1)
+    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = stable_kl, loss_last_fn = torch.nn.CrossEntropyLoss(ignore_index=-1))
 
 def cl_forward(cls,
     encoder,
