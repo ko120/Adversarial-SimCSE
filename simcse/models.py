@@ -238,7 +238,7 @@ def cl_init(cls, config):
         cls.mlp = MLPLayer(config)
     cls.sim = Similarity(temp=cls.model_args.temp)
     cls.init_weights()
-    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = stable_kl, loss_last_fn = torch.nn.CrossEntropyLoss(ignore_index=-1))
+    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = stable_kl, loss_last_fn =sym_kl_loss )
 
 def cl_forward(cls,
     encoder,
