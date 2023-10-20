@@ -134,7 +134,7 @@ class SMARTLoss(nn.Module):
         noise = torch.randn_like(embed, requires_grad=True) * self.noise_var
         # Indefinite loop with counter
         for i in count():
-
+            pdb.set_trace()
             # Compute perturbed embed and states
             embed_perturbed = embed + noise
             state_perturbed = self.eval_fn(embed_perturbed)
@@ -264,14 +264,14 @@ def cl_forward(cls,
     num_sent = input_ids.size(1)
 
     mlm_outputs = None
-    # first_sentence_input_ids = input_ids[:, 0, :]
-    # first_sentence_attention_mask = attention_mask[:, 0, :]
+    first_sentence_input_ids = input_ids[:, 0, :]
+    first_sentence_attention_mask = attention_mask[:, 0, :]
 
     # Flatten input for encoding
     input_ids = input_ids.view((-1, input_ids.size(-1))) # (bs * num_sent, len)
     attention_mask = attention_mask.view((-1, attention_mask.size(-1))) # (bs * num_sent len)
     if token_type_ids is not None:
-        # first_token = token_type_ids[:,0,:]
+        first_token = token_type_ids[:,0,:]
         token_type_ids = token_type_ids.view((-1, token_type_ids.size(-1))) # (bs * num_sent, len)
 
 
@@ -288,17 +288,17 @@ def cl_forward(cls,
         return_dict=True,
     )
   
-    # first_output= encoder(
-    #     first_sentence_input_ids,
-    #     attention_mask=first_sentence_attention_mask,
-    #     token_type_ids=first_token,
-    #     position_ids=position_ids,
-    #     head_mask=head_mask,
-    #     inputs_embeds=inputs_embeds,
-    #     output_attentions=output_attentions,
-    #     output_hidden_states=True if cls.model_args.pooler_type in ['avg_top2', 'avg_first_last'] else False,
-    #     return_dict=True,
-    # )
+    first_output= encoder(
+        first_sentence_input_ids,
+        attention_mask=first_sentence_attention_mask,
+        token_type_ids=first_token,
+        position_ids=position_ids,
+        head_mask=head_mask,
+        inputs_embeds=inputs_embeds,
+        output_attentions=output_attentions,
+        output_hidden_states=True if cls.model_args.pooler_type in ['avg_top2', 'avg_first_last'] else False,
+        return_dict=True,
+    )
 
     # MLM auxiliary objective
     if mlm_input_ids is not None:
@@ -317,8 +317,9 @@ def cl_forward(cls,
 
     # Pooling
     pooler_output = cls.pooler(attention_mask, outputs)
+    first_pooled = cls.pooler(first_sentence_attention_mask, first_output)
     pooler_output = pooler_output.view((batch_size, num_sent, pooler_output.size(-1))) # (bs, num_sent, hidden)
-    
+    z1_indp = cls.mlp(first_pooled)
     # If using "cls", we add an extra MLP layer
     # (same as BERT's original implementation) over the representation.
     if cls.pooler_type == "cls":
@@ -382,10 +383,10 @@ def cl_forward(cls,
     #   #paded_emb = torch.cat([out_emb,padding_tensor],dim=0)
     #   loss_adv = cls.smart_loss(out_emb,z1[:out_emb.size(0),:])
 
-    z1_emb =outputs.last_hidden_state[:,0,:]
-    z1_emb = z1_emb[:z1.size(0),:]
+    z1_emb =first_output.last_hidden_state[:,0,:]
     
-    loss_adv = cls.smart_loss(z1_emb,z1)
+    
+    loss_adv = cls.smart_loss(z1_emb,z1_indp)
     
     alpha = 0.5
     loss_cont = loss_fct(cos_sim, labels)
