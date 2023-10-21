@@ -153,7 +153,8 @@ class SMARTLoss(nn.Module):
             noise_gradient= noise + self.step_size * noise_gradient
             # Normalize new noise step into norm induced ball
             noise,_ = _norm_grad(grad=noise_gradient,eff_grad = eff_delta_grad)
-
+         
+            noise = torch.clamp(noise, min = -self.epsilon)
             # Reset noise gradients for next step
             noise = noise.detach()
             noise.requires_grad_()
