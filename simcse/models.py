@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
-
+import pdb
 import transformers
 from transformers import RobertaTokenizer
 from transformers.models.roberta.modeling_roberta import RobertaPreTrainedModel, RobertaModel, RobertaLMHead
@@ -22,7 +22,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 from itertools import count
-import pdb
+
 
 
 def exists(val):
@@ -134,7 +134,7 @@ class SMARTLoss(nn.Module):
         noise = torch.randn_like(embed, requires_grad=True) * self.noise_var
         # Indefinite loop with counter
         for i in count():
-            pdb.set_trace()
+
             # Compute perturbed embed and states
             embed_perturbed = embed + noise
             state_perturbed = self.eval_fn(embed_perturbed)
@@ -259,9 +259,10 @@ def cl_forward(cls,
     return_dict = return_dict if return_dict is not None else cls.config.use_return_dict
     ori_input_ids = input_ids
     batch_size = input_ids.size(0)
+    num_sent = input_ids.size(1)
     # Number of sentences in one instance
     # 2: pair instance; 3: pair instance with a hard negative
-    num_sent = input_ids.size(1)
+    
 
     mlm_outputs = None
     # extract first sent
@@ -269,16 +270,18 @@ def cl_forward(cls,
     first_sentence_attention_mask = attention_mask[:, 0, :]
     
     # extract second and third sent
+    
     input_ids = input_ids[:,1:,:]
     attention_mask = attention_mask[:,1:,:]
     
+  
     # Flatten input for encoding
-    input_ids = input_ids.view((-1, input_ids.size(-1))) # (bs * num_sent, len)
-    attention_mask = attention_mask.view((-1, attention_mask.size(-1))) # (bs * num_sent len)
+    input_ids = input_ids.reshape((-1, input_ids.size(-1))) # (bs * num_sent, len)
+    attention_mask = attention_mask.reshape((-1, attention_mask.size(-1))) # (bs * num_sent len)
     if token_type_ids is not None:
         first_token = token_type_ids[:,0,:]
         token_type_ids = token_type_ids[:,1:,:]
-        token_type_ids = token_type_ids.view((-1, token_type_ids.size(-1))) # (bs * num_sent, len)
+        token_type_ids = token_type_ids.reshape((-1, token_type_ids.size(-1))) # (bs * num_sent, len)
 
 
     # Get raw embeddings
@@ -324,7 +327,7 @@ def cl_forward(cls,
     # Pooling
     pooler_output = cls.pooler(attention_mask, outputs)
     first_pooled = cls.pooler(first_sentence_attention_mask, first_output)
-    pooler_output = pooler_output.view((batch_size, num_sent, pooler_output.size(-1))) # (bs, num_sent, hidden)
+    pooler_output = pooler_output.view((batch_size, 2, pooler_output.size(-1))) # (bs, num_sent, hidden)
     z1 = cls.mlp(first_pooled)
     # If using "cls", we add an extra MLP layer
     # (same as BERT's original implementation) over the representation.
@@ -383,7 +386,7 @@ def cl_forward(cls,
 
 
     z1_emb =first_output.last_hidden_state[:,0,:]
-    
+
     
     loss_adv = cls.smart_loss(z1_emb,z1)
     
@@ -568,3 +571,4 @@ class RobertaForCL(RobertaPreTrainedModel):
                 mlm_input_ids=mlm_input_ids,
                 mlm_labels=mlm_labels,
             )
+
