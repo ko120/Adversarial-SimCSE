@@ -264,14 +264,20 @@ def cl_forward(cls,
     num_sent = input_ids.size(1)
 
     mlm_outputs = None
+    # extract first sent
     first_sentence_input_ids = input_ids[:, 0, :]
     first_sentence_attention_mask = attention_mask[:, 0, :]
-
+    
+    # extract second and third sent
+    input_ids = input_ids[:,1:,:]
+    attention_mask = attention_mask[:,1:,:]
+    
     # Flatten input for encoding
     input_ids = input_ids.view((-1, input_ids.size(-1))) # (bs * num_sent, len)
     attention_mask = attention_mask.view((-1, attention_mask.size(-1))) # (bs * num_sent len)
     if token_type_ids is not None:
         first_token = token_type_ids[:,0,:]
+        token_type_ids = token_type_ids[:,1:,:]
         token_type_ids = token_type_ids.view((-1, token_type_ids.size(-1))) # (bs * num_sent, len)
 
 
@@ -319,18 +325,18 @@ def cl_forward(cls,
     pooler_output = cls.pooler(attention_mask, outputs)
     first_pooled = cls.pooler(first_sentence_attention_mask, first_output)
     pooler_output = pooler_output.view((batch_size, num_sent, pooler_output.size(-1))) # (bs, num_sent, hidden)
-    z1_indp = cls.mlp(first_pooled)
+    z1 = cls.mlp(first_pooled)
     # If using "cls", we add an extra MLP layer
     # (same as BERT's original implementation) over the representation.
     if cls.pooler_type == "cls":
         pooler_output = cls.mlp(pooler_output)
 
     # Separate representation
-    z1, z2 = pooler_output[:,0], pooler_output[:,1]
+    z2 = pooler_output[:, 0]
 
     # Hard negative
     if num_sent == 3:
-        z3 = pooler_output[:, 2]
+        z3 = pooler_output[:, 1]
 
     # Gather all embeddings if using distributed training
     if dist.is_initialized() and cls.training:
@@ -375,18 +381,11 @@ def cl_forward(cls,
         ).to(cls.device)
         cos_sim = cos_sim + weights
 
-    # if outputs.last_hidden_state[:z1.size(0),0].shape == z1.shape:
-    #   loss_adv = cls.smart_loss(outputs.last_hidden_state[:z1.size(0),0],z1)
-    # else:
-    #   out_emb =outputs.last_hidden_state[:,0]
-    #   #padding_tensor = torch.ones(z1.size(0)-out_emb.size(0), out_emb.size(1)).to(cls.device)
-    #   #paded_emb = torch.cat([out_emb,padding_tensor],dim=0)
-    #   loss_adv = cls.smart_loss(out_emb,z1[:out_emb.size(0),:])
 
     z1_emb =first_output.last_hidden_state[:,0,:]
     
     
-    loss_adv = cls.smart_loss(z1_emb,z1_indp)
+    loss_adv = cls.smart_loss(z1_emb,z1)
     
     alpha = 0.5
     loss_cont = loss_fct(cos_sim, labels)
