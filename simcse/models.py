@@ -140,7 +140,7 @@ class SMARTLoss(nn.Module):
             state_perturbed = self.eval_fn(embed_perturbed)
             # Return final loss if last step (undetached state)
             if i == self.num_steps:
-                return self.loss_last_fn(state, state_perturbed)
+                return self.loss_last_fn(state_perturbed,state)
             # Compute perturbation loss (detached state)
             loss = self.loss_fn(state_perturbed, state.detach())
             # Compute noise gradient ∂loss/∂noise
@@ -270,7 +270,6 @@ def cl_forward(cls,
     first_sentence_attention_mask = attention_mask[:, 0, :]
     
     # extract second and third sent
-    
     input_ids = input_ids[:,1:,:]
     attention_mask = attention_mask[:,1:,:]
     
