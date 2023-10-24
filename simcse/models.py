@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import torch.distributed as dist
 import pdb
 import transformers
-from transformers import RobertaTokenizer
+from transformers import RobertaTokenizer, EncoderDecoderModel,AutoTokenizer
 from transformers.models.roberta.modeling_roberta import RobertaPreTrainedModel, RobertaModel, RobertaLMHead
 from transformers.models.bert.modeling_bert import BertPreTrainedModel, BertModel, BertLMPredictionHead
 from transformers.activations import gelu
@@ -14,6 +14,7 @@ from transformers.file_utils import (
     add_start_docstrings_to_model_forward,
     replace_return_docstrings,
 )
+from transformers import BertTokenizer
 from transformers.modeling_outputs import SequenceClassifierOutput, BaseModelOutputWithPoolingAndCrossAttentions
 from typing import Union, Callable
 
@@ -69,7 +70,7 @@ def sym_kl_loss(input, target, reduction='sum', alpha=1.0):
   return loss
 
 def _norm_grad(grad, eff_grad=None, sentence_level=False):
-    norm_p = "inf"
+    norm_p = "l2"
     epsilon = 1e-6
     if norm_p == "l2":
         if sentence_level:
@@ -92,7 +93,7 @@ def _norm_grad(grad, eff_grad=None, sentence_level=False):
             eff_direction = eff_grad / (
                 grad.abs().max(-1, keepdim=True)[0] + epsilon
             )
-    return direction, eff_direction
+    return direction
 
 def js_loss(input, target, reduction='sum', alpha=1.0):
     mean_proba = 0.5 * (F.softmax(input.detach(), dim=-1) + F.softmax(target.detach(), dim=-1))
@@ -134,14 +135,14 @@ class SMARTLoss(nn.Module):
         noise = torch.randn_like(embed, requires_grad=True) * self.noise_var
         # Indefinite loop with counter
         for i in count():
-
             # Compute perturbed embed and states
             embed_perturbed = embed + noise
             state_perturbed = self.eval_fn(embed_perturbed)
             # Return final loss if last step (undetached state)
             if i == self.num_steps:
-                return self.loss_last_fn(state_perturbed,state)
+                return self.loss_last_fn(state_perturbed, state)
             # Compute perturbation loss (detached state)
+          
             loss = self.loss_fn(state_perturbed, state.detach())
             # Compute noise gradient ∂loss/∂noise
             noise_gradient, = torch.autograd.grad(loss, noise, only_inputs=True, retain_graph=False)
@@ -152,9 +153,18 @@ class SMARTLoss(nn.Module):
             eff_delta_grad = noise_gradient * self.step_size
             noise_gradient= noise + self.step_size * noise_gradient
             # Normalize new noise step into norm induced ball
-            noise,_ = _norm_grad(grad=noise_gradient,eff_grad = eff_delta_grad)
-         
-            noise = torch.clamp(noise, min = -self.epsilon)
+            noise = _norm_grad(grad=noise_gradient,eff_grad = eff_delta_grad)
+        
+            scaling_factor = 4
+    
+            # xx = embed + noise
+            # sentence_fuser = EncoderDecoderModel.from_pretrained("google/roberta2roberta_L-24_discofuse")
+            # tokenizer = AutoTokenizer.from_pretrained("google/roberta2roberta_L-24_discofuse")
+            # s= sentence_fuser.generate(xx)
+            # zz = tokenizer.decode(s)
+            # Scale grad to project it onto the L2-norm ball
+            noise = noise * scaling_factor
+            # noise = torch.clamp(noise, min = -self.epsilon)
             # Reset noise gradients for next step
             noise = noise.detach()
             noise.requires_grad_()
