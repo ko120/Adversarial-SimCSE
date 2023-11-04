@@ -142,7 +142,6 @@ class SMARTLoss(nn.Module):
             if i == self.num_steps:
                 return self.loss_last_fn(state_perturbed, state)
             # Compute perturbation loss (detached state)
-          
             loss = self.loss_fn(state_perturbed, state.detach())
             # Compute noise gradient ∂loss/∂noise
             noise_gradient, = torch.autograd.grad(loss, noise, only_inputs=True, retain_graph=False)
@@ -154,19 +153,16 @@ class SMARTLoss(nn.Module):
             noise_gradient= noise + self.step_size * noise_gradient
             # Normalize new noise step into norm induced ball
             noise = _norm_grad(grad=noise_gradient,eff_grad = eff_delta_grad)
-
-            
-
+        
             # scaling_factor = 4
-    
             # xx = embed + noise
             # sentence_fuser = EncoderDecoderModel.from_pretrained("google/roberta2roberta_L-24_discofuse")
             # tokenizer = AutoTokenizer.from_pretrained("google/roberta2roberta_L-24_discofuse")
-            # s= sentence_fuser.generate(xx)
+            # s = sentence_fuser.generate(xx)
             # zz = tokenizer.decode(s)
             # Scale grad to project it onto the L2-norm ball
             # noise = noise * scaling_factor
-              noise = torch.clamp(noise, min = -self.epsilon)
+            noise = torch.clamp(noise, min = -self.epsilon)
             # Reset noise gradients for next step
             noise = noise.detach()
             noise.requires_grad_()
@@ -252,7 +248,7 @@ def cl_init(cls, config):
         cls.mlp = MLPLayer(config)
     cls.sim = Similarity(temp=cls.model_args.temp)
     cls.init_weights()
-    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = stable_kl, loss_last_fn =sym_kl_loss )
+    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = stable_kl, loss_last_fn =sym_kl_loss)
 
 def cl_forward(cls,
     encoder,
@@ -398,11 +394,9 @@ def cl_forward(cls,
 
 
     z1_emb =first_output.last_hidden_state[:,0,:]
-
-    
     loss_adv = cls.smart_loss(z1_emb,z1)
-
-    alpha = cls.model_args.alpha
+    
+    alpha = 0.5
     loss_cont = loss_fct(cos_sim, labels)
     loss = loss_cont + alpha*loss_adv*(loss_cont.item()/loss_adv.item())
 
@@ -583,3 +577,4 @@ class RobertaForCL(RobertaPreTrainedModel):
                 mlm_input_ids=mlm_input_ids,
                 mlm_labels=mlm_labels,
             )
+
