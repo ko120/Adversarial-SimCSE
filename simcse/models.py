@@ -155,7 +155,7 @@ class SMARTLoss(nn.Module):
             # Normalize new noise step into norm induced ball
             noise = _norm_grad(grad=noise_gradient,eff_grad = eff_delta_grad)
         
-            scaling_factor = 4
+            # scaling_factor = 4
     
             # xx = embed + noise
             # sentence_fuser = EncoderDecoderModel.from_pretrained("google/roberta2roberta_L-24_discofuse")
@@ -163,8 +163,8 @@ class SMARTLoss(nn.Module):
             # s= sentence_fuser.generate(xx)
             # zz = tokenizer.decode(s)
             # Scale grad to project it onto the L2-norm ball
-            noise = noise * scaling_factor
-            # noise = torch.clamp(noise, min = -self.epsilon)
+            # noise = noise * scaling_factor
+              noise = torch.clamp(noise, min = -self.epsilon)
             # Reset noise gradients for next step
             noise = noise.detach()
             noise.requires_grad_()
@@ -250,7 +250,7 @@ def cl_init(cls, config):
         cls.mlp = MLPLayer(config)
     cls.sim = Similarity(temp=cls.model_args.temp)
     cls.init_weights()
-    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = stable_kl, loss_last_fn =sym_kl_loss )
+    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = stable_kl, loss_last_fn =js_loss )
 
 def cl_forward(cls,
     encoder,
