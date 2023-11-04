@@ -9,7 +9,7 @@ import collections
 import random
 import pdb
 from datasets import load_dataset
-
+import wandb
 import transformers
 from transformers import (
     CONFIG_MAPPING,
@@ -248,7 +248,9 @@ def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
-
+    wandb.init()
+    cfig = wandb.config
+    alpha = cfig.alpha
 
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, OurTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
@@ -263,7 +265,7 @@ def main():
         and os.listdir(training_args.output_dir)
         and training_args.do_train
         and not training_args.overwrite_output_dir
-    ):
+    )
         raise ValueError(
             f"Output directory ({training_args.output_dir}) already exists and is not empty."
             "Use --overwrite_output_dir to overcome."
@@ -539,7 +541,7 @@ def main():
         tokenizer=tokenizer,
         data_collator=data_collator,
     )
-
+    model_args.alpha = alpha
     trainer.model_args = model_args
     
   
@@ -591,4 +593,12 @@ def _mp_fn(index):
 
 
 if __name__ == "__main__":
-    main()
+    wandb_on = True
+    if wandb_on:
+        sweep_config = dict()
+        sweep_config['method'] = 'grid'
+        sweep_config['metric'] = {'name': 'test_accuracy', 'goal': 'maximize'}
+        sweep_config['parameters'] = {'alpha' : {'values' : [0.1,0.3,0.5,0.7,0.9]}, 'K_iter':[3]}
+        sweep_id = wandb.sweep(sweep_config, project = 'Adversarial_SimCSE')
+        wandb.agent(sweep_id, main)
+
