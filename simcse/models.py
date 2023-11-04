@@ -70,7 +70,7 @@ def sym_kl_loss(input, target, reduction='sum', alpha=1.0):
   return loss
 
 def _norm_grad(grad, eff_grad=None, sentence_level=False):
-    norm_p = "l2"
+    norm_p = "inf"
     epsilon = 1e-6
     if norm_p == "l2":
         if sentence_level:
@@ -115,7 +115,7 @@ class SMARTLoss(nn.Module):
         loss_fn: Callable,
         loss_last_fn: Callable = None,
         norm_fn: Callable = inf_norm,
-        num_steps: int = 1,
+        num_steps: int = 3,
         step_size: float = 1e-3,
         epsilon: float = 1e-6,
         noise_var: float = 1e-5
@@ -154,7 +154,9 @@ class SMARTLoss(nn.Module):
             noise_gradient= noise + self.step_size * noise_gradient
             # Normalize new noise step into norm induced ball
             noise = _norm_grad(grad=noise_gradient,eff_grad = eff_delta_grad)
-        
+
+            
+
             # scaling_factor = 4
     
             # xx = embed + noise
@@ -250,7 +252,7 @@ def cl_init(cls, config):
         cls.mlp = MLPLayer(config)
     cls.sim = Similarity(temp=cls.model_args.temp)
     cls.init_weights()
-    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = stable_kl, loss_last_fn =js_loss )
+    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = stable_kl, loss_last_fn =sym_kl_loss )
 
 def cl_forward(cls,
     encoder,
@@ -399,8 +401,8 @@ def cl_forward(cls,
 
     
     loss_adv = cls.smart_loss(z1_emb,z1)
-    
-    alpha = 0.5
+
+    alpha = cls.model_args.alpha
     loss_cont = loss_fct(cos_sim, labels)
     loss = loss_cont + alpha*loss_adv*(loss_cont.item()/loss_adv.item())
 
@@ -581,4 +583,3 @@ class RobertaForCL(RobertaPreTrainedModel):
                 mlm_input_ids=mlm_input_ids,
                 mlm_labels=mlm_labels,
             )
-
