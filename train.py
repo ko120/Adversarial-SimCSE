@@ -580,7 +580,7 @@ def main():
                     logger.info(f"  {key} = {value}")
                     writer.write(f"{key} = {value}\n")
     part1 = "python3.7 evaluation.py"
-    part2 = "--model_name_or_path princeton-nlp/sup-simcse-bert-base-uncased" +str(alpha)
+    part2 = "--model_name_or_path result/my-sup-simcse-bert-base-uncased" +str(alpha)
     part3 = "--pooler cls"
     part4 = "--task_set sts"
     part5 = "--mode test"
