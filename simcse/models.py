@@ -69,8 +69,8 @@ def sym_kl_loss(input, target, reduction='sum', alpha=1.0):
   loss = loss
   return loss
 
-def _norm_grad(grad, eff_grad=None, sentence_level=False):
-    norm_p = "inf"
+def _norm_grad(grad, sentence_level=False):
+    norm_p = "l2"
     epsilon = 1e-6
     if norm_p == "l2":
         if sentence_level:
@@ -90,9 +90,7 @@ def _norm_grad(grad, eff_grad=None, sentence_level=False):
             )
         else:
             direction = grad / (grad.abs().max(-1, keepdim=True)[0] + epsilon)
-            eff_direction = eff_grad / (
-                grad.abs().max(-1, keepdim=True)[0] + epsilon
-            )
+           
     return direction
 
 def js_loss(input, target, reduction='sum', alpha=1.0):
@@ -115,7 +113,7 @@ class SMARTLoss(nn.Module):
         loss_fn: Callable,
         loss_last_fn: Callable = None,
         norm_fn: Callable = inf_norm,
-        num_steps: int = 3,
+        num_steps: int = 1,
         step_size: float = 1e-3,
         epsilon: float = 1e-6,
         noise_var: float = 1e-5
@@ -132,10 +130,12 @@ class SMARTLoss(nn.Module):
 
     def forward(self, embed: Tensor, state: Tensor) -> Tensor:
         
-        noise = torch.randn_like(embed, requires_grad=True) * self.noise_var
+        noise = torch.randn_like(embed, requires_grad=True)
         # Indefinite loop with counter
         for i in count():
             # Compute perturbed embed and states
+            noise = _norm_grad(grad=noise_gradient)
+            noise = noise * 0.1
             embed_perturbed = embed + noise
             state_perturbed = self.eval_fn(embed_perturbed)
             # Return final loss if last step (undetached state)
@@ -144,25 +144,25 @@ class SMARTLoss(nn.Module):
             # Compute perturbation loss (detached state)
             loss = self.loss_fn(state_perturbed, state.detach())
             # Compute noise gradient ∂loss/∂noise
-            noise_gradient, = torch.autograd.grad(loss, noise, only_inputs=True, retain_graph=False)
+            (noise_gradient,) = torch.autograd.grad(loss, noise, only_inputs=True, retain_graph=False)
             norm = noise_gradient.norm()
             if torch.isnan(norm) or torch.isinf(norm):
                 return 0
             # Move noise towards gradient to change state as much as possible
-            eff_delta_grad = noise_gradient * self.step_size
+        
             noise_gradient= noise + self.step_size * noise_gradient
             # Normalize new noise step into norm induced ball
-            noise = _norm_grad(grad=noise_gradient,eff_grad = eff_delta_grad)
+            noise = _norm_grad(grad=noise_gradient)
         
-            # scaling_factor = 4
+            scaling_factor = 5
             # xx = embed + noise
             # sentence_fuser = EncoderDecoderModel.from_pretrained("google/roberta2roberta_L-24_discofuse")
             # tokenizer = AutoTokenizer.from_pretrained("google/roberta2roberta_L-24_discofuse")
             # s = sentence_fuser.generate(xx)
             # zz = tokenizer.decode(s)
             # Scale grad to project it onto the L2-norm ball
-            # noise = noise * scaling_factor
-            noise = torch.clamp(noise, min = -self.epsilon)
+            noise = noise * scaling_factor
+            # noise = torch.clamp(noise, min = -self.epsilon)
             # Reset noise gradients for next step
             noise = noise.detach()
             noise.requires_grad_()
