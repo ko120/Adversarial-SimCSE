@@ -131,11 +131,12 @@ class SMARTLoss(nn.Module):
     def forward(self, embed: Tensor, state: Tensor) -> Tensor:
         
         noise = torch.randn_like(embed, requires_grad=True)
+        noise = _norm_grad(grad=noise_gradient)
+        noise = noise * 0.1
         # Indefinite loop with counter
         for i in count():
             # Compute perturbed embed and states
-            noise = _norm_grad(grad=noise_gradient)
-            noise = noise * 0.1
+        
             embed_perturbed = embed + noise
             state_perturbed = self.eval_fn(embed_perturbed)
             # Return final loss if last step (undetached state)
