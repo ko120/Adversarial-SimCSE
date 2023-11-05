@@ -579,13 +579,17 @@ def main():
                 for key, value in sorted(results.items()):
                     logger.info(f"  {key} = {value}")
                     writer.write(f"{key} = {value}\n")
-    part1 = "python evaluation.py"
+    part1 = "python3.7 evaluation.py"
     part2 = "--model_name_or_path princeton-nlp/sup-simcse-bert-base-uncased" +str(alpha)
     part3 = "--pooler cls"
     part4 = "--task_set sts"
     part5 = "--mode test"
     command = f"{part1} {part2} {part3} {part4} {part5}"
-    
+    directory_path = training_args.output_dir
+
+    # Save all files in the directory to wandb
+    wandb.save(directory_path)
+
     os.system(command)
     return results
 
