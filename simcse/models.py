@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import torch.distributed as dist
 import pdb
 import transformers
-from transformers import RobertaTokenizer, EncoderDecoderModel,AutoTokenizer
+from transformers import RobertaTokenizer, EncoderDecoderModel,AutoTokenizer,RobertaConfig
 from transformers.models.roberta.modeling_roberta import RobertaPreTrainedModel, RobertaModel, RobertaLMHead,RobertaForCausalLM
 from transformers.models.bert.modeling_bert import BertPreTrainedModel, BertModel, BertLMPredictionHead
 from transformers.activations import gelu
@@ -128,7 +128,7 @@ class SMARTLoss(nn.Module):
         self.epsilon = epsilon
         self.noise_var = noise_var
 
-    def forward(self, embed: Tensor, state: Tensor) -> Tensor:
+    def forward(self, embed: Tensor, state: Tensor,radius) -> Tensor:
         
         noise = torch.randn_like(embed, requires_grad=True)
         noise = _norm_grad(grad=noise)
@@ -136,20 +136,22 @@ class SMARTLoss(nn.Module):
         # Indefinite loop with counter
         for i in count():
             # Compute perturbed embed and states
-        
             embed_perturbed = embed + noise
             state_perturbed = self.eval_fn(embed_perturbed)
-            config = RobertaConfig.from_pretrained('roberta-base')
-            tok = AutoTokenizer.from_pretrained("roberta-base")
-
+            # config = RobertaConfig.from_pretrained('roberta-base')
+            # tok = AutoTokenizer.from_pretrained("roberta-base")
+            # model = RobertaForCausalLM.from_pretrained('roberta-base', config=config)
             # Modify the configuration for decoding
-            config.is_decoder = True
-            config.add_cross_attention = True
+            # config.is_decoder = True
+            # config.add_cross_attention = True
             
             # Load RoBERTa with the modified configuration as a causal language model
-            model = RobertaForCausalLM.from_pretrained('roberta-base', config=config)
-            gen_ids = model.generate(input_ids=None, encoder_outputs=embed_perturbed)
-            tok.batch_decode(gen_ids)
+            # model = EncoderDecoderModel.from_pretrained("google/roberta2roberta_L-24_gigaword")
+            # tok = AutoTokenizer.from_pretrained("google/roberta2roberta_L-24_gigaword")
+            # pdb.set_trace()
+            # gen_ids = model.generate(input_ids=None, encoder_outputs=embed_perturbed)
+            
+            # tok.batch_decode(gen_ids)
             # Return final loss if last step (undetached state)
             if i == self.num_steps:
                 return self.loss_last_fn(state_perturbed, state)
@@ -166,14 +168,14 @@ class SMARTLoss(nn.Module):
             # Normalize new noise step into norm induced ball
             noise = _norm_grad(grad=noise_gradient)
         
-            scaling_factor = 5
+          
             # xx = embed + noise
             # sentence_fuser = EncoderDecoderModel.from_pretrained("google/roberta2roberta_L-24_discofuse")
             # tokenizer = AutoTokenizer.from_pretrained("google/roberta2roberta_L-24_discofuse")
             # s = sentence_fuser.generate(xx)
             # zz = tokenizer.decode(s)
             # Scale grad to project it onto the L2-norm ball
-            noise = noise * scaling_factor
+            noise = noise * radius
             # noise = torch.clamp(noise, min = -self.epsilon)
             # Reset noise gradients for next step
             noise = noise.detach()
@@ -407,10 +409,12 @@ def cl_forward(cls,
         cos_sim = cos_sim + weights
 
 
+    alpha = cls.model_args.alpha
+    radius = cls.model_args.radius
+
     z1_emb =first_output.last_hidden_state[:,0,:]
-    loss_adv = cls.smart_loss(z1_emb,z1)
+    loss_adv = cls.smart_loss(z1_emb,z1,radius)
     
-    alpha = 0.5
     loss_cont = loss_fct(cos_sim, labels)
     loss = loss_cont + alpha*loss_adv*(loss_cont.item()/loss_adv.item())
 
