@@ -5,7 +5,7 @@ import torch.distributed as dist
 import pdb
 import transformers
 from transformers import RobertaTokenizer, EncoderDecoderModel,AutoTokenizer
-from transformers.models.roberta.modeling_roberta import RobertaPreTrainedModel, RobertaModel, RobertaLMHead
+from transformers.models.roberta.modeling_roberta import RobertaPreTrainedModel, RobertaModel, RobertaLMHead,RobertaForCausalLM
 from transformers.models.bert.modeling_bert import BertPreTrainedModel, BertModel, BertLMPredictionHead
 from transformers.activations import gelu
 from transformers.file_utils import (
@@ -139,6 +139,17 @@ class SMARTLoss(nn.Module):
         
             embed_perturbed = embed + noise
             state_perturbed = self.eval_fn(embed_perturbed)
+            config = RobertaConfig.from_pretrained('roberta-base')
+            tok = AutoTokenizer.from_pretrained("roberta-base")
+
+            # Modify the configuration for decoding
+            config.is_decoder = True
+            config.add_cross_attention = True
+            
+            # Load RoBERTa with the modified configuration as a causal language model
+            model = RobertaForCausalLM.from_pretrained('roberta-base', config=config)
+            gen_ids = model.generate(input_ids=None, encoder_outputs=embed_perturbed)
+            tok.batch_decode(gen_ids)
             # Return final loss if last step (undetached state)
             if i == self.num_steps:
                 return self.loss_last_fn(state_perturbed, state)
