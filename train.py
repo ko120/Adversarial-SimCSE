@@ -252,8 +252,10 @@ def main():
         wandb.init()
         cfig = wandb.config
         alpha = cfig.alpha
+        radius = cfig.radius
     else:
         alpha = 0.5
+        radius = 5
     
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, OurTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
@@ -545,6 +547,7 @@ def main():
         data_collator=data_collator,
     )
     model_args.alpha = alpha
+    model_args.radius = radius
     trainer.model_args = model_args
     
   
@@ -608,7 +611,7 @@ if __name__ == "__main__":
         sweep_config = dict()
         sweep_config['method'] = 'grid'
         sweep_config['metric'] = {'name': 'test_accuracy', 'goal': 'maximize'}
-        sweep_config['parameters'] = {'alpha' : {'values' : [0.5]}, 'K_iter':{'values':[1]}}
+        sweep_config['parameters'] = {'alpha' : {'values' : [0.5]}, 'K_iter':{'values':[1]}, 'radius':{'values':[1,2,3,4,5]}}
         sweep_id = wandb.sweep(sweep_config, project = 'Adversarial_SimCSE')
         wandb.agent(sweep_id, main)
     else:
