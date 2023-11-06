@@ -248,9 +248,12 @@ def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
-    wandb.init()
-    cfig = wandb.config
-    alpha = cfig.alpha
+    if wandb_on:
+        wandb.init()
+        cfig = wandb.config
+        alpha = cfig.alpha
+    else:
+        alpha = 0.5
     
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, OurTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
@@ -588,7 +591,8 @@ def main():
     directory_path = training_args.output_dir
 
     # Save all files in the directory to wandb
-    wandb.save(directory_path)
+    if wandb_on:
+        wandb.save(directory_path)
 
     os.system(command)
     return results
@@ -599,12 +603,12 @@ def _mp_fn(index):
 
 
 if __name__ == "__main__":
-    wandb_on = True
+    wandb_on = False
     if wandb_on:
         sweep_config = dict()
         sweep_config['method'] = 'grid'
         sweep_config['metric'] = {'name': 'test_accuracy', 'goal': 'maximize'}
-        sweep_config['parameters'] = {'alpha' : {'values' : [0.5]}, 'K_iter':{'values':[3]}}
+        sweep_config['parameters'] = {'alpha' : {'values' : [0.5]}, 'K_iter':{'values':[1]}}
         sweep_id = wandb.sweep(sweep_config, project = 'Adversarial_SimCSE')
         wandb.agent(sweep_id, main)
 
