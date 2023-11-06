@@ -10,6 +10,7 @@ import random
 import pdb
 from datasets import load_dataset
 import wandb
+
 import transformers
 from transformers import (
     CONFIG_MAPPING,
@@ -595,7 +596,7 @@ def main():
 
     # Save all files in the directory to wandb
     if wandb_on:
-        wandb.save(directory_path)
+        wandb.save(os.path.join(directory_path, '*'))
 
     os.system(command)
     return results
@@ -606,14 +607,15 @@ def _mp_fn(index):
 
 
 if __name__ == "__main__":
-    wandb_on = False
+    wandb_on = True
     if wandb_on:
         sweep_config = dict()
         sweep_config['method'] = 'grid'
         sweep_config['metric'] = {'name': 'test_accuracy', 'goal': 'maximize'}
-        sweep_config['parameters'] = {'alpha' : {'values' : [0.5]}, 'K_iter':{'values':[1]}, 'radius':{'values':[1,2,3,4,5]}}
+        sweep_config['parameters'] = {'alpha' : {'values' : [0.5]}, 'K_iter':{'values':[1]}, 'radius':{'values':[2]}}
         sweep_id = wandb.sweep(sweep_config, project = 'Adversarial_SimCSE')
         wandb.agent(sweep_id, main)
     else:
         main()
+
 
