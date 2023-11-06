@@ -291,6 +291,8 @@ def cl_forward(cls,
         first_token = token_type_ids[:,0,:]
         token_type_ids = token_type_ids[:,1:,:]
         token_type_ids = token_type_ids.reshape((-1, token_type_ids.size(-1))) # (bs * num_sent, len)
+    else:
+        first_token = None
 
 
     # Get raw embeddings
