@@ -132,7 +132,7 @@ class SMARTLoss(nn.Module):
         
         noise = torch.randn_like(embed, requires_grad=True)
         noise = _norm_grad(grad=noise)
-        noise = noise * 0.1
+        noise = noise * self.noise_var
         # Indefinite loop with counter
         for i in count():
             # Compute perturbed embed and states
@@ -175,8 +175,8 @@ class SMARTLoss(nn.Module):
             # s = sentence_fuser.generate(xx)
             # zz = tokenizer.decode(s)
             # Scale grad to project it onto the L2-norm ball
-            noise = noise * radius
-            # noise = torch.clamp(noise, min = -self.epsilon)
+            # noise = noise * radius
+              noise = torch.clamp(noise, min = -self.epsilon)
             # Reset noise gradients for next step
             noise = noise.detach()
             noise.requires_grad_()
