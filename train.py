@@ -588,7 +588,7 @@ def main():
                     writer.write(f"{key} = {value}\n")
     part1 = "python3.7 evaluation.py"
     part2 = "--model_name_or_path result/my-sup-simcse-bert-base-uncased" +str(alpha)
-    part3 = "--pooler cls"
+    part3 = "--pooler cls_before_pooler"
     part4 = "--task_set sts"
     part5 = "--mode test"
     command = f"{part1} {part2} {part3} {part4} {part5}"
@@ -612,7 +612,7 @@ if __name__ == "__main__":
         sweep_config = dict()
         sweep_config['method'] = 'grid'
         sweep_config['metric'] = {'name': 'test_accuracy', 'goal': 'maximize'}
-        sweep_config['parameters'] = {'alpha' : {'values' : [0.5]}, 'K_iter':{'values':[1]}, 'radius':{'values':[2]}}
+        sweep_config['parameters'] = {'alpha' : {'values' : [0.5]}, 'K_iter':{'values':[1]}, 'radius':{'values':[5]}}
         sweep_id = wandb.sweep(sweep_config, project = 'Adversarial_SimCSE')
         wandb.agent(sweep_id, main)
     else:
