@@ -114,6 +114,7 @@ class CLTrainer(Trainer):
                 batch[k] = batch[k].to(self.args.device)
             with torch.no_grad():
                 outputs = self.model(**batch, output_hidden_states=True, return_dict=True, sent_emb=True)
+  
                 pooler_output = outputs.last_hidden_state[:,0,:]
             return pooler_output.cpu()
 
