@@ -70,7 +70,7 @@ def sym_kl_loss(input, target, reduction='sum', alpha=1.0):
   return loss
 
 def _norm_grad(grad, sentence_level=False):
-    norm_p = "l2"
+    norm_p = "inf"
     epsilon = 1e-6
     if norm_p == "l2":
         if sentence_level:
@@ -191,11 +191,12 @@ class MLPLayer(nn.Module):
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.activation = nn.Tanh()
+        self.norm = nn.LayerNorm(config.hidden_size)
 
     def forward(self, features, **kwargs):
         x = self.dense(features)
         x = self.activation(x)
-
+        x = self.norm(x)
         return x
 
 class Similarity(nn.Module):
