@@ -176,7 +176,7 @@ class SMARTLoss(nn.Module):
             # zz = tokenizer.decode(s)
             # Scale grad to project it onto the L2-norm ball
             # noise = noise * radius
-              noise = torch.clamp(noise, min = -self.epsilon)
+            noise = torch.clamp(noise, min = -self.epsilon)
             # Reset noise gradients for next step
             noise = noise.detach()
             noise.requires_grad_()
