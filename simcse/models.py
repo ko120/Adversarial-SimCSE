@@ -69,28 +69,20 @@ def sym_kl_loss(input, target, reduction='sum', alpha=1.0):
   loss = loss
   return loss
 
-def _norm_grad(grad, sentence_level=False):
-    norm_p = "inf"
+def _norm_grad(grad, norm_type, radius = None):
+    norm_p = str(norm_type)
     epsilon = 1e-6
     if norm_p == "l2":
-        if sentence_level:
-            direction = grad / (
-                torch.norm(grad, dim=(-2, -1), keepdim=True) + epsilon
-            )
+        init_norm = torch.norm(grad, dim=-1, keepdim=True)
+        if (init_norm > radius).any():
+            direction = (grad * radius) / (init_norm + epsilon)
         else:
-            direction = grad / (
-                torch.norm(grad, dim=-1, keepdim=True) + epsilon
-            )
+          direction = grad
     elif norm_p == "l1":
         direction = grad.sign()
     else:
-        if sentence_level:
-            direction = grad / (
-                grad.abs().max((-2, -1), keepdim=True)[0] + epsilon
-            )
-        else:
-            direction = grad / (grad.abs().max(-1, keepdim=True)[0] + epsilon)
-           
+        direction = grad / (grad.abs().max(-1, keepdim=True)[0] + epsilon)
+          
     return direction
 
 def js_loss(input, target, reduction='sum', alpha=1.0):
@@ -131,52 +123,29 @@ class SMARTLoss(nn.Module):
     def forward(self, embed: Tensor, state: Tensor,radius) -> Tensor:
         
         noise = torch.randn_like(embed, requires_grad=True)
-        noise = _norm_grad(grad=noise)
-        noise = noise * self.noise_var
+        noise = _norm_grad(grad=noise, norm_type = "l2", radius = radius)
+   
         # Indefinite loop with counter
         for i in count():
             # Compute perturbed embed and states
             embed_perturbed = embed + noise
             state_perturbed = self.eval_fn(embed_perturbed)
-            # config = RobertaConfig.from_pretrained('roberta-base')
-            # tok = AutoTokenizer.from_pretrained("roberta-base")
-            # model = RobertaForCausalLM.from_pretrained('roberta-base', config=config)
-            # Modify the configuration for decoding
-            # config.is_decoder = True
-            # config.add_cross_attention = True
-            
-            # Load RoBERTa with the modified configuration as a causal language model
-            # model = EncoderDecoderModel.from_pretrained("google/roberta2roberta_L-24_gigaword")
-            # tok = AutoTokenizer.from_pretrained("google/roberta2roberta_L-24_gigaword")
-            # pdb.set_trace()
-            # gen_ids = model.generate(input_ids=None, encoder_outputs=embed_perturbed)
-            
-            # tok.batch_decode(gen_ids)
-            # Return final loss if last step (undetached state)
+          
             if i == self.num_steps:
-                return self.loss_last_fn(state_perturbed, state)
-            # Compute perturbation loss (detached state)
-            loss = self.loss_fn(state_perturbed, state.detach())
+                return self.loss_last_fn(state ,state_perturbed)
+           
+            loss = self.loss_fn(F.log_softmax(state, dim=-1, dtype=torch.float32),F.softmax(state_perturbed, dim=-1, dtype=torch.float32))
             # Compute noise gradient ∂loss/∂noise
-            (noise_gradient,) = torch.autograd.grad(loss, noise, only_inputs=True, retain_graph=False)
+            (noise_gradient,) = torch.autograd.grad(loss, noise, only_inputs=True, retain_graph=False,allow_unused=True)
             norm = noise_gradient.norm()
             if torch.isnan(norm) or torch.isinf(norm):
                 return 0
             # Move noise towards gradient to change state as much as possible
-        
-            noise_gradient= noise + self.step_size * noise_gradient
+            noise= noise + self.step_size * noise_gradient
             # Normalize new noise step into norm induced ball
-            noise = _norm_grad(grad=noise_gradient)
-        
+            noise = _norm_grad(grad=noise, norm_type = "l2", radius = radius)
           
-            # xx = embed + noise
-            # sentence_fuser = EncoderDecoderModel.from_pretrained("google/roberta2roberta_L-24_discofuse")
-            # tokenizer = AutoTokenizer.from_pretrained("google/roberta2roberta_L-24_discofuse")
-            # s = sentence_fuser.generate(xx)
-            # zz = tokenizer.decode(s)
-            # Scale grad to project it onto the L2-norm ball
-            # noise = noise * radius
-            noise = torch.clamp(noise, min = -self.epsilon)
+            # noise = torch.clamp(noise, min = -self.epsilon)
             # Reset noise gradients for next step
             noise = noise.detach()
             noise.requires_grad_()
@@ -194,9 +163,10 @@ class MLPLayer(nn.Module):
         self.norm = nn.LayerNorm(config.hidden_size)
 
     def forward(self, features, **kwargs):
-        x = self.dense(features)
+        x = self.norm(features)
+        x = self.dense(x)
         x = self.activation(x)
-        x = self.norm(x)
+        # x = self.norm(x)
         return x
 
 class Similarity(nn.Module):
@@ -263,7 +233,8 @@ def cl_init(cls, config):
         cls.mlp = MLPLayer(config)
     cls.sim = Similarity(temp=cls.model_args.temp)
     cls.init_weights()
-    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = stable_kl, loss_last_fn =sym_kl_loss)
+    kl_loss = torch.nn.KLDivLoss(reduction = "batchmean")
+    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = kl_loss, loss_last_fn =sym_kl_loss)
 
 def cl_forward(cls,
     encoder,
@@ -412,7 +383,6 @@ def cl_forward(cls,
 
     alpha = cls.model_args.alpha
     radius = cls.model_args.radius
-
     z1_emb =first_output.last_hidden_state[:,0,:]
     loss_adv = cls.smart_loss(z1_emb,z1,radius)
     
