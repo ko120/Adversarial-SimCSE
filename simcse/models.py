@@ -72,6 +72,7 @@ def sym_kl_loss(input, target, reduction='sum', alpha=1.0):
 def _norm_grad(grad, norm_type, radius = None):
     norm_p = str(norm_type)
     epsilon = 1e-6
+
     if norm_p == "l2":
         init_norm = torch.norm(grad, dim=-1, keepdim=True)
         if (init_norm > radius).any():
@@ -85,17 +86,20 @@ def _norm_grad(grad, norm_type, radius = None):
           
     return direction
 
-def js_loss(input, target, reduction='sum', alpha=1.0):
-    mean_proba = 0.5 * (F.softmax(input.detach(), dim=-1) + F.softmax(target.detach(), dim=-1))
-    return alpha * (F.kl_div(
-        F.log_softmax(input, dim=-1),
-        mean_proba,
-        reduction=reduction
-    ) + F.kl_div(
-        F.log_softmax(target, dim=-1),
-        mean_proba,
-        reduction=reduction
-    ))
+def js_loss(input, target, reduction='batchmean', alpha=0.5):
+        input = input.float()
+        target = target.float()
+        m = F.softmax(target.detach(), dim=-1, dtype=torch.float32) + F.softmax(
+            input.detach(), dim=-1, dtype=torch.float32
+        )
+        m = 0.5 * m
+        loss = F.kl_div(
+            F.log_softmax(input, dim=-1, dtype=torch.float32), m, reduction=reduction
+        ) + F.kl_div(
+            F.log_softmax(target, dim=-1, dtype=torch.float32), m, reduction=reduction
+        )
+        return loss * alpha
+    
 
 class SMARTLoss(nn.Module):
 
@@ -133,7 +137,8 @@ class SMARTLoss(nn.Module):
           
             if i == self.num_steps:
                 return self.loss_last_fn(state ,state_perturbed)
-           
+            
+       
             loss = self.loss_fn(F.log_softmax(state, dim=-1, dtype=torch.float32),F.softmax(state_perturbed, dim=-1, dtype=torch.float32))
             # Compute noise gradient ∂loss/∂noise
             (noise_gradient,) = torch.autograd.grad(loss, noise, only_inputs=True, retain_graph=False,allow_unused=True)
@@ -141,6 +146,7 @@ class SMARTLoss(nn.Module):
             if torch.isnan(norm) or torch.isinf(norm):
                 return 0
             # Move noise towards gradient to change state as much as possible
+            
             noise= noise + self.step_size * noise_gradient
             # Normalize new noise step into norm induced ball
             noise = _norm_grad(grad=noise, norm_type = "l2", radius = radius)
@@ -234,7 +240,7 @@ def cl_init(cls, config):
     cls.sim = Similarity(temp=cls.model_args.temp)
     cls.init_weights()
     kl_loss = torch.nn.KLDivLoss(reduction = "batchmean")
-    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = kl_loss, loss_last_fn =sym_kl_loss)
+    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = kl_loss, loss_last_fn =js_loss)
 
 def cl_forward(cls,
     encoder,
