@@ -1,645 +1,576 @@
-import logging
-import math
-import os
-import sys
-from dataclasses import dataclass, field
-from typing import Optional, Union, List, Dict, Tuple
 import torch
-import collections
-import random
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.distributed as dist
 import pdb
-from datasets import load_dataset
-import wandb
-
 import transformers
-from transformers import (
-    CONFIG_MAPPING,
-    MODEL_FOR_MASKED_LM_MAPPING,
-    AutoConfig,
-    AutoModelForMaskedLM,
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-    DataCollatorForLanguageModeling,
-    DataCollatorWithPadding,
-    HfArgumentParser,
-    Trainer,
-    TrainingArguments,
-    default_data_collator,
-    set_seed,
-    EvalPrediction,
-    BertModel,
-    BertForPreTraining,
-    RobertaModel
+from transformers import RobertaTokenizer, EncoderDecoderModel,AutoTokenizer,RobertaConfig
+from transformers.models.roberta.modeling_roberta import RobertaPreTrainedModel, RobertaModel, RobertaLMHead,RobertaForCausalLM
+from transformers.models.bert.modeling_bert import BertPreTrainedModel, BertModel, BertLMPredictionHead
+from transformers.activations import gelu
+from transformers.file_utils import (
+    add_code_sample_docstrings,
+    add_start_docstrings,
+    add_start_docstrings_to_model_forward,
+    replace_return_docstrings,
 )
-import optuna
-from transformers.tokenization_utils_base import BatchEncoding, PaddingStrategy, PreTrainedTokenizerBase
-from transformers.trainer_utils import is_main_process
-from transformers.data.data_collator import DataCollatorForLanguageModeling
-from transformers.file_utils import cached_property, torch_required, is_torch_available, is_torch_tpu_available
-from simcse.models import RobertaForCL, BertForCL
-from simcse.trainers import CLTrainer
-
-logger = logging.getLogger(__name__)
-MODEL_CONFIG_CLASSES = list(MODEL_FOR_MASKED_LM_MAPPING.keys())
-MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
-
-@dataclass
-class ModelArguments:
-    """
-    Arguments pertaining to which model/config/tokenizer we are going to fine-tune, or train from scratch.
-    """
-
-    # Huggingface's original arguments
-    model_name_or_path: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "The model checkpoint for weights initialization."
-            "Don't set if you want to train a model from scratch."
-        },
-    )
-    model_type: Optional[str] = field(
-        default=None,
-        metadata={"help": "If training from scratch, pass a model type from the list: " + ", ".join(MODEL_TYPES)},
-    )
-    config_name: Optional[str] = field(
-        default=None, metadata={"help": "Pretrained config name or path if not the same as model_name"}
-    )
-    tokenizer_name: Optional[str] = field(
-        default=None, metadata={"help": "Pretrained tokenizer name or path if not the same as model_name"}
-    )
-    cache_dir: Optional[str] = field(
-        default=None,
-        metadata={"help": "Where do you want to store the pretrained models downloaded from huggingface.co"},
-    )
-    use_fast_tokenizer: bool = field(
-        default=True,
-        metadata={"help": "Whether to use one of the fast tokenizer (backed by the tokenizers library) or not."},
-    )
-    model_revision: str = field(
-        default="main",
-        metadata={"help": "The specific model version to use (can be a branch name, tag name or commit id)."},
-    )
-    use_auth_token: bool = field(
-        default=False,
-        metadata={
-            "help": "Will use the token generated when running `transformers-cli login` (necessary to use this script "
-            "with private models)."
-        },
-    )
-
-    # SimCSE's arguments
-    temp: float = field(
-        default=0.05,
-        metadata={
-            "help": "Temperature for softmax."
-        }
-    )
-    pooler_type: str = field(
-        default="cls",
-        metadata={
-            "help": "What kind of pooler to use (cls, cls_before_pooler, avg, avg_top2, avg_first_last)."
-        }
-    ) 
-    hard_negative_weight: float = field(
-        default=0,
-        metadata={
-            "help": "The **logit** of weight for hard negatives (only effective if hard negatives are used)."
-        }
-    )
-    do_mlm: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to use MLM auxiliary objective."
-        }
-    )
-    mlm_weight: float = field(
-        default=0.1,
-        metadata={
-            "help": "Weight for MLM auxiliary objective (only effective if --do_mlm)."
-        }
-    )
-    mlp_only_train: bool = field(
-        default=False,
-        metadata={
-            "help": "Use MLP only during training"
-        }
-    )
+from transformers import BertTokenizer
+from transformers.modeling_outputs import SequenceClassifierOutput, BaseModelOutputWithPoolingAndCrossAttentions
+from typing import Union, Callable
+import torch.nn.functional as F
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch import Tensor
+from itertools import count
 
 
-@dataclass
-class DataTrainingArguments:
-    """
-    Arguments pertaining to what data we are going to input our model for training and eval.
-    """
 
-    # Huggingface's original arguments. 
-    dataset_name: Optional[str] = field(
-        default=None, metadata={"help": "The name of the dataset to use (via the datasets library)."}
-    )
-    dataset_config_name: Optional[str] = field(
-        default=None, metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
-    )
-    overwrite_cache: bool = field(
-        default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
-    )
-    validation_split_percentage: Optional[int] = field(
-        default=5,
-        metadata={
-            "help": "The percentage of the train set used as validation set in case there's no validation split"
-        },
-    )
-    preprocessing_num_workers: Optional[int] = field(
-        default=None,
-        metadata={"help": "The number of processes to use for the preprocessing."},
-    )
+def exists(val):
+    return val is not None
 
-    # SimCSE's arguments
-    train_file: Optional[str] = field(
-        default=None, 
-        metadata={"help": "The training data file (.txt or .csv)."}
-    )
-    max_seq_length: Optional[int] = field(
-        default=32,
-        metadata={
-            "help": "The maximum total input sequence length after tokenization. Sequences longer "
-            "than this will be truncated."
-        },
-    )
-    pad_to_max_length: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to pad all samples to `max_seq_length`. "
-            "If False, will pad the samples dynamically when batching to the maximum length in the batch."
-        },
-    )
-    mlm_probability: float = field(
-        default=0.15, 
-        metadata={"help": "Ratio of tokens to mask for MLM (only effective if --do_mlm)"}
-    )
+def default(val, d):
+    if exists(val):
+        return val
+    return d
 
-    def __post_init__(self):
-        if self.dataset_name is None and self.train_file is None and self.validation_file is None:
-            raise ValueError("Need either a dataset name or a training/validation file.")
-        else:
-            if self.train_file is not None:
-                extension = self.train_file.split(".")[-1]
-                assert extension in ["csv", "json", "txt"], "`train_file` should be a csv, a json or a txt file."
+def inf_norm(x):
+    return torch.norm(x, p=float('inf'), dim=-1, keepdim=True)
 
 
-@dataclass
-class OurTrainingArguments(TrainingArguments):
-    # Evaluation
-    ## By default, we evaluate STS (dev) during training (for selecting best checkpoints) and evaluate 
-    ## both STS and transfer tasks (dev) at the end of training. Using --eval_transfer will allow evaluating
-    ## both STS and transfer tasks (dev) during training.
-    eval_transfer: bool = field(
-        default=False,
-        metadata={"help": "Evaluate transfer task dev sets (in validation)."}
-    )
-
-    @cached_property
-    @torch_required
-    def _setup_devices(self) -> "torch.device":
-        logger.info("PyTorch: setting up devices")
-        if self.no_cuda:
-            device = torch.device("cpu")
-            self._n_gpu = 0
-        elif is_torch_tpu_available():
-            import torch_xla.core.xla_model as xm
-            device = xm.xla_device()
-            self._n_gpu = 0
-        elif self.local_rank == -1:
-            # if n_gpu is > 1 we'll use nn.DataParallel.
-            # If you only want to use a specific subset of GPUs use `CUDA_VISIBLE_DEVICES=0`
-            # Explicitly set CUDA to the first (index 0) CUDA device, otherwise `set_device` will
-            # trigger an error that a device index is missing. Index 0 takes into account the
-            # GPUs available in the environment, so `CUDA_VISIBLE_DEVICES=1,2` with `cuda:0`
-            # will use the first GPU in that env, i.e. GPU#1
-            device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-            # Sometimes the line in the postinit has not been run before we end up here, so just checking we're not at
-            # the default value.
-            self._n_gpu = torch.cuda.device_count()
-        else:
-            # Here, we'll use torch.distributed.
-            # Initializes the distributed backend which will take care of synchronizing nodes/GPUs
-            #
-            # deepspeed performs its own DDP internally, and requires the program to be started with:
-            # deepspeed  ./program.py
-            # rather than:
-            # python -m torch.distributed.launch --nproc_per_node=2 ./program.py
-            if self.deepspeed:
-                from .integrations import is_deepspeed_available
-
-                if not is_deepspeed_available():
-                    raise ImportError("--deepspeed requires deepspeed: `pip install deepspeed`.")
-                import deepspeed
-
-                deepspeed.init_distributed()
-            else:
-                torch.distributed.init_process_group(backend="nccl")
-            device = torch.device("cuda", self.local_rank)
-            self._n_gpu = 1
-
-        if device.type == "cuda":
-            torch.cuda.set_device(device)
-
-        return device
-
-
-def main(trial= None):
-    # See all possible arguments in src/transformers/training_args.py
-    # or by passing the --help flag to this script.
-    # We now keep distinct sets of args, for a cleaner separation of concerns.
-    if wandb_on:
-        wandb.init()
-        cfig = wandb.config
-        alpha = cfig.alpha
-        radius = cfig.radius
-    elif optuna_on:
-        alpha = trial.suggest_float('alpha',0.1, 1)
-        radius = trial.suggest_float('radius',1, 10)
-        step_size = trial.suggest_float('step_size', 1e-5,1e-3,log=True)
-        reduction = trial.suggest_categorical("reduction", ["sum", "batchmean"])
+def stable_kl(logit, target, epsilon=1e-6, reduce=False):
+    logit = logit.view(-1, logit.size(-1)).float()
+    target = target.view(-1, target.size(-1)).float()
+    bs = logit.size(0)
+    p = F.log_softmax(logit, 1).exp()
+    y = F.log_softmax(target, 1).exp()
+    rp = -(1.0 / (p + epsilon) - 1 + epsilon).detach().log()
+    ry = -(1.0 / (y + epsilon) - 1 + epsilon).detach().log()
+    if reduce:
+        return (p * (rp - ry) * 2).sum() / bs
     else:
-        alpha = 0.5
-        radius = 5
-        step_size = 1e-3
-        reduction = "sum"
-        
+        return (p * (rp - ry) * 2).sum()
+
+
+def sym_kl_loss(input, target, reduction='sum', alpha=1.0):
+
+  """input/target: logits"""
+  input = input.float()
+  target = target.float()
+  loss = F.kl_div(
+      F.log_softmax(input, dim=-1, dtype=torch.float32),
+      F.softmax(target.detach(), dim=-1, dtype=torch.float32),
+      reduction=reduction,
+  ) + F.kl_div(
+      F.log_softmax(target, dim=-1, dtype=torch.float32),
+      F.softmax(input.detach(), dim=-1, dtype=torch.float32),
+      reduction=reduction,
+  )
+  loss = loss
+  return loss
+
+def _norm_grad(grad, norm_type, radius = None):
+    norm_p = str(norm_type)
+    epsilon = 1e-6
+
+    if norm_p == "l2":
+        init_norm = torch.norm(grad, dim=-1, keepdim=True)
+        if (init_norm > radius).any():
+            direction = (grad * radius) / (init_norm + epsilon)
+        else:
+          direction = grad
+    elif norm_p == "l1":
+        direction = grad.sign()
+    else:
+        direction = grad / (grad.abs().max(-1, keepdim=True)[0] + epsilon)
+          
+    return direction
+
+def js_loss(input, target, reduction='batchmean', alpha=0.5):
+        input = input.float()
+        target = target.float()
+        m = F.softmax(target.detach(), dim=-1, dtype=torch.float32) + F.softmax(
+            input.detach(), dim=-1, dtype=torch.float32
+        )
+        m = 0.5 * m
+        loss = F.kl_div(
+            F.log_softmax(input, dim=-1, dtype=torch.float32), m, reduction=reduction
+        ) + F.kl_div(
+            F.log_softmax(target, dim=-1, dtype=torch.float32), m, reduction=reduction
+        )
+        return loss * alpha
     
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, OurTrainingArguments))
-    if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
-        # If we pass only one argument to the script and it's the path to a json file,
-        # let's parse it to get our arguments.
-        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
-    else:
-        model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    if (
-        os.path.exists(training_args.output_dir)
-        and os.listdir(training_args.output_dir)
-        and training_args.do_train
-        and not training_args.overwrite_output_dir
-    ):
-        raise ValueError(
-            f"Output directory ({training_args.output_dir}) already exists and is not empty."
-            "Use --overwrite_output_dir to overcome."
-        )
-    training_args.output_dir += str( alpha)
-    # Setup logging
-    logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
-        datefmt="%m/%d/%Y %H:%M:%S",
-        level=logging.INFO if is_main_process(training_args.local_rank) else logging.WARN,
-    )
+class SMARTLoss(nn.Module):
 
-    # Log on each process the small summary:
-    logger.warning(
-        f"Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}"
-        + f" distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}"
-    )
-    # Set the verbosity to info of the Transformers logger (on main process only):
-    if is_main_process(training_args.local_rank):
-        transformers.utils.logging.set_verbosity_info()
-        transformers.utils.logging.enable_default_handler()
-        transformers.utils.logging.enable_explicit_format()
-    logger.info("Training/evaluation parameters %s", training_args)
+    def __init__(
+        self,
+        eval_fn: Callable,
+        loss_fn: Callable,
+        loss_last_fn: Callable = None,
+        norm_fn: Callable = inf_norm,
+        num_steps: int = 1,
+        step_size: float = 1e-3,
+        epsilon: float = 1e-6,
+        noise_var: float = 1e-5
+    ) -> None:
+        super().__init__()
+        self.eval_fn = eval_fn
+        self.loss_fn = loss_fn
+        self.loss_last_fn = default(loss_last_fn, loss_fn)
+        self.norm_fn = norm_fn
+        self.num_steps = num_steps
+        self.step_size = step_size
+        self.epsilon = epsilon
+        self.noise_var = noise_var
+    
+    def forward(self, embed: Tensor, state: Tensor, radius, step_size, reduction) -> Tensor:
+        
+        noise = torch.randn_like(embed, requires_grad=True)
+        noise = _norm_grad(grad=noise, norm_type = "l2", radius = radius)
+   
+        # Indefinite loop with counter
+        for i in count():
+            # Compute perturbed embed and states
+            embed_perturbed = embed + noise
+            state_perturbed = self.eval_fn(embed_perturbed)
+          
+            if i == self.num_steps:
+                return self.loss_last_fn(input = state , target = state_perturbed, reduction = reduction)
+            
+       
+            loss = self.loss_fn(F.log_softmax(state, dim=-1, dtype=torch.float32),F.softmax(state_perturbed, dim=-1, dtype=torch.float32))
+            # Compute noise gradient ∂loss/∂noise
+            (noise_gradient,) = torch.autograd.grad(loss, noise, only_inputs=True, retain_graph=False,allow_unused=True)
+            norm = noise_gradient.norm()
+            if torch.isnan(norm) or torch.isinf(norm):
+                return 0
+            # Move noise towards gradient to change state as much as possible
+            noise= noise + step_size * noise_gradient
+            # Normalize new noise step into norm induced ball
+            noise = _norm_grad(grad=noise, norm_type = "l2", radius = radius)
+          
+            # noise = torch.clamp(noise, min = -self.epsilon)
+            # Reset noise gradients for next step
+            noise = noise.detach()
+            noise.requires_grad_()
 
-    # Set seed before initializing model.
-    set_seed(training_args.seed)
 
-    # Get the datasets: you can either provide your own CSV/JSON/TXT training and evaluation files (see below)
-    # or just provide the name of one of the public datasets available on the hub at https://huggingface.co/datasets/
-    # (the dataset will be downloaded automatically from the datasets Hub
-    #
-    # For CSV/JSON files, this script will use the column called 'text' or the first column. You can easily tweak this
-    # behavior (see below)
-    #
-    # In distributed training, the load_dataset function guarantee that only one local process can concurrently
-    # download the dataset.
-    data_files = {}
-    if data_args.train_file is not None:
-        data_files["train"] = data_args.train_file
-    extension = data_args.train_file.split(".")[-1]
-    if extension == "txt":
-        extension = "text"
-    if extension == "csv":
-        datasets = load_dataset(extension, data_files=data_files, cache_dir="./data/", delimiter="\t" if "tsv" in data_args.train_file else ",")
-    else:
-        datasets = load_dataset(extension, data_files=data_files, cache_dir="./data/")
+class MLPLayer(nn.Module):
+    """
+    Head for getting sentence representations over RoBERTa/BERT's CLS representation.
+    """
 
-    # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
-    # https://huggingface.co/docs/datasets/loading_datasets.html.
+    def __init__(self, config):
+        super().__init__()
+        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
+        self.activation = nn.Tanh()
+        self.norm = nn.LayerNorm(config.hidden_size)
 
-    # Load pretrained model and tokenizer
-    #
-    # Distributed training:
-    # The .from_pretrained methods guarantee that only one local process can concurrently
-    # download model & vocab.
-    config_kwargs = {
-        "cache_dir": model_args.cache_dir,
-        "revision": model_args.model_revision,
-        "use_auth_token": True if model_args.use_auth_token else None,
-    }
-    if model_args.config_name:
-        config = AutoConfig.from_pretrained(model_args.config_name, **config_kwargs)
-    elif model_args.model_name_or_path:
-        config = AutoConfig.from_pretrained(model_args.model_name_or_path, **config_kwargs)
-    else:
-        config = CONFIG_MAPPING[model_args.model_type]()
-        logger.warning("You are instantiating a new config instance from scratch.")
+    def forward(self, features, **kwargs):
+        x = self.norm(features)
+        x = self.dense(x)
+        x = self.activation(x)
+        # x = self.norm(x)
+        return x
 
-    tokenizer_kwargs = {
-        "cache_dir": model_args.cache_dir,
-        "use_fast": model_args.use_fast_tokenizer,
-        "revision": model_args.model_revision,
-        "use_auth_token": True if model_args.use_auth_token else None,
-    }
-    if model_args.tokenizer_name:
-        tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, **tokenizer_kwargs)
-    elif model_args.model_name_or_path:
-        tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, **tokenizer_kwargs)
-    else:
-        raise ValueError(
-            "You are instantiating a new tokenizer from scratch. This is not supported by this script."
-            "You can do it from another script, save it, and load it from here, using --tokenizer_name."
-        )
+class Similarity(nn.Module):
+    """
+    Dot product or cosine similarity
+    """
 
-    if model_args.model_name_or_path:
-        if 'roberta' in model_args.model_name_or_path:
-            model = RobertaForCL.from_pretrained(
-                model_args.model_name_or_path,
-                from_tf=bool(".ckpt" in model_args.model_name_or_path),
-                config=config,
-                cache_dir=model_args.cache_dir,
-                revision=model_args.model_revision,
-                use_auth_token=True if model_args.use_auth_token else None,
-                model_args=model_args                  
-            )
-        elif 'bert' in model_args.model_name_or_path:
-            model = BertForCL.from_pretrained(
-                model_args.model_name_or_path,
-                from_tf=bool(".ckpt" in model_args.model_name_or_path),
-                config=config,
-                cache_dir=model_args.cache_dir,
-                revision=model_args.model_revision,
-                use_auth_token=True if model_args.use_auth_token else None,
-                model_args=model_args
-            )
-            if model_args.do_mlm:
-                pretrained_model = BertForPreTraining.from_pretrained(model_args.model_name_or_path)
-                model.lm_head.load_state_dict(pretrained_model.cls.predictions.state_dict())
+    def __init__(self, temp):
+        super().__init__()
+        self.temp = temp
+        self.cos = nn.CosineSimilarity(dim=-1)
+
+    def forward(self, x, y):
+        return self.cos(x, y) / self.temp
+
+
+class Pooler(nn.Module):
+    """
+    Parameter-free poolers to get the sentence embedding
+    'cls': [CLS] representation with BERT/RoBERTa's MLP pooler.
+    'cls_before_pooler': [CLS] representation without the original MLP pooler.
+    'avg': average of the last layers' hidden states at each token.
+    'avg_top2': average of the last two layers.
+    'avg_first_last': average of the first and the last layers.
+    """
+    def __init__(self, pooler_type,config):
+        super().__init__()
+        self.pooler_type = pooler_type
+        assert self.pooler_type in ["cls", "cls_before_pooler", "avg", "avg_top2", "avg_first_last"], "unrecognized pooling type %s" % self.pooler_type
+        self.mlp = MLPLayer(config)
+    def forward(self, attention_mask, outputs):
+        
+        last_hidden = outputs.last_hidden_state
+        pooler_output = outputs.pooler_output
+        hidden_states = outputs.hidden_states
+
+
+
+        if self.pooler_type in ['cls_before_pooler', 'cls']:
+            return last_hidden[:, 0]
+        elif self.pooler_type == "avg":
+            return ((last_hidden * attention_mask.unsqueeze(-1)).sum(1) / attention_mask.sum(-1).unsqueeze(-1))
+        elif self.pooler_type == "avg_first_last":
+            first_hidden = hidden_states[1]
+            last_hidden = hidden_states[-1]
+            pooled_result = ((first_hidden + last_hidden) / 2.0 * attention_mask.unsqueeze(-1)).sum(1) / attention_mask.sum(-1).unsqueeze(-1)
+            return pooled_result
+        elif self.pooler_type == "avg_top2":
+            second_last_hidden = hidden_states[-2]
+            last_hidden = hidden_states[-1]
+            pooled_result = ((last_hidden + second_last_hidden) / 2.0 * attention_mask.unsqueeze(-1)).sum(1) / attention_mask.sum(-1).unsqueeze(-1)
+            return pooled_result
         else:
             raise NotImplementedError
-    else:
-        raise NotImplementedError
-        logger.info("Training new model from scratch")
-        model = AutoModelForMaskedLM.from_config(config)
 
-    model.resize_token_embeddings(len(tokenizer))
 
-    # Prepare features
-    column_names = datasets["train"].column_names
-    sent2_cname = None
-    if len(column_names) == 2:
-        # Pair datasets
-        sent0_cname = column_names[0]
-        sent1_cname = column_names[1]
-    elif len(column_names) == 3:
-        # Pair datasets with hard negatives
-        sent0_cname = column_names[0]
-        sent1_cname = column_names[1]
-        sent2_cname = column_names[2]
-    elif len(column_names) == 1:
-        # Unsupervised datasets
-        sent0_cname = column_names[0]
-        sent1_cname = column_names[0]
-    else:
-        raise NotImplementedError
+def cl_init(cls, config):
+    """
+    Contrastive learning class init function.
+    """
+    cls.pooler_type = cls.model_args.pooler_type
+    cls.pooler = Pooler(cls.model_args.pooler_type,config)
+    if cls.model_args.pooler_type == "cls":
+        cls.mlp = MLPLayer(config)
+    cls.sim = Similarity(temp=cls.model_args.temp)
+    cls.init_weights()
+    kl_loss = torch.nn.KLDivLoss(reduction = "batchmean")
+    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = kl_loss, loss_last_fn =sym_kl_loss)
 
-    def prepare_features(examples):
-        # padding = longest (default)
-        #   If no sentence in the batch exceed the max length, then use
-        #   the max sentence length in the batch, otherwise use the 
-        #   max sentence length in the argument and truncate those that
-        #   exceed the max length.
-        # padding = max_length (when pad_to_max_length, for pressure test)
-        #   All sentences are padded/truncated to data_args.max_seq_length.
-        total = len(examples[sent0_cname])
+def cl_forward(cls,
+    encoder,
+    input_ids=None,
+    attention_mask=None,
+    token_type_ids=None,
+    position_ids=None,
+    head_mask=None,
+    inputs_embeds=None,
+    labels=None,
+    output_attentions=None,
+    output_hidden_states=None,
+    return_dict=None,
+    mlm_input_ids=None,
+    mlm_labels=None,
+):
+    return_dict = return_dict if return_dict is not None else cls.config.use_return_dict
+    ori_input_ids = input_ids
+    batch_size = input_ids.size(0)
+    num_sent = input_ids.size(1)
+    # Number of sentences in one instance
+    # 2: pair instance; 3: pair instance with a hard negative
+    
 
-        # Avoid "None" fields 
-        for idx in range(total):
-            if examples[sent0_cname][idx] is None:
-                examples[sent0_cname][idx] = " "
-            if examples[sent1_cname][idx] is None:
-                examples[sent1_cname][idx] = " "
-        
-        sentences = examples[sent0_cname] + examples[sent1_cname]
-
-        # If hard negative exists
-        if sent2_cname is not None:
-            for idx in range(total):
-                if examples[sent2_cname][idx] is None:
-                    examples[sent2_cname][idx] = " "
-            sentences += examples[sent2_cname]
-
-        sent_features = tokenizer(
-            sentences,
-            max_length=data_args.max_seq_length,
-            truncation=True,
-            padding="max_length" if data_args.pad_to_max_length else False,
-        )
-
-        features = {}
-        if sent2_cname is not None:
-            for key in sent_features:
-                features[key] = [[sent_features[key][i], sent_features[key][i+total], sent_features[key][i+total*2]] for i in range(total)]
-        else:
-            for key in sent_features:
-                features[key] = [[sent_features[key][i], sent_features[key][i+total]] for i in range(total)]
-            
-        return features
-
-    if training_args.do_train:
-        train_dataset = datasets["train"].map(
-            prepare_features,
-            batched=True,
-            num_proc=data_args.preprocessing_num_workers,
-            remove_columns=column_names,
-            load_from_cache_file=not data_args.overwrite_cache,
-        )
-
-    # Data collator
-    @dataclass
-    class OurDataCollatorWithPadding:
-
-        tokenizer: PreTrainedTokenizerBase
-        padding: Union[bool, str, PaddingStrategy] = True
-        max_length: Optional[int] = None
-        pad_to_multiple_of: Optional[int] = None
-        mlm: bool = True
-        mlm_probability: float = data_args.mlm_probability
-
-        def __call__(self, features: List[Dict[str, Union[List[int], List[List[int]], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
-            special_keys = ['input_ids', 'attention_mask', 'token_type_ids', 'mlm_input_ids', 'mlm_labels']
-            bs = len(features)
-            if bs > 0:
-                num_sent = len(features[0]['input_ids'])
-            else:
-                return
-            flat_features = []
-            for feature in features:
-                for i in range(num_sent):
-                    flat_features.append({k: feature[k][i] if k in special_keys else feature[k] for k in feature})
-
-            batch = self.tokenizer.pad(
-                flat_features,
-                padding=self.padding,
-                max_length=self.max_length,
-                pad_to_multiple_of=self.pad_to_multiple_of,
-                return_tensors="pt",
-            )
-            if model_args.do_mlm:
-                batch["mlm_input_ids"], batch["mlm_labels"] = self.mask_tokens(batch["input_ids"])
-
-            batch = {k: batch[k].view(bs, num_sent, -1) if k in special_keys else batch[k].view(bs, num_sent, -1)[:, 0] for k in batch}
-
-            if "label" in batch:
-                batch["labels"] = batch["label"]
-                del batch["label"]
-            if "label_ids" in batch:
-                batch["labels"] = batch["label_ids"]
-                del batch["label_ids"]
-
-            return batch
-        
-        def mask_tokens(
-            self, inputs: torch.Tensor, special_tokens_mask: Optional[torch.Tensor] = None
-        ) -> Tuple[torch.Tensor, torch.Tensor]:
-            """
-            Prepare masked tokens inputs/labels for masked language modeling: 80% MASK, 10% random, 10% original.
-            """
-            inputs = inputs.clone()
-            labels = inputs.clone()
-            # We sample a few tokens in each sequence for MLM training (with probability `self.mlm_probability`)
-            probability_matrix = torch.full(labels.shape, self.mlm_probability)
-            if special_tokens_mask is None:
-                special_tokens_mask = [
-                    self.tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True) for val in labels.tolist()
-                ]
-                special_tokens_mask = torch.tensor(special_tokens_mask, dtype=torch.bool)
-            else:
-                special_tokens_mask = special_tokens_mask.bool()
-
-            probability_matrix.masked_fill_(special_tokens_mask, value=0.0)
-            masked_indices = torch.bernoulli(probability_matrix).bool()
-            labels[~masked_indices] = -100  # We only compute loss on masked tokens
-
-            # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
-            indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices
-            inputs[indices_replaced] = self.tokenizer.convert_tokens_to_ids(self.tokenizer.mask_token)
-
-            # 10% of the time, we replace masked input tokens with random word
-            indices_random = torch.bernoulli(torch.full(labels.shape, 0.5)).bool() & masked_indices & ~indices_replaced
-            random_words = torch.randint(len(self.tokenizer), labels.shape, dtype=torch.long)
-            inputs[indices_random] = random_words[indices_random]
-
-            # The rest of the time (10% of the time) we keep the masked input tokens unchanged
-            return inputs, labels
-
-    data_collator = default_data_collator if data_args.pad_to_max_length else OurDataCollatorWithPadding(tokenizer)
-
-    trainer = CLTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset if training_args.do_train else None,
-        tokenizer=tokenizer,
-        data_collator=data_collator,
-    )
-    model_args.alpha = alpha
-    model_args.radius = radius
-    model_args.step_size = step_size
-    model_arggs.reduction = reduction
-
-    trainer.model_args = model_args
+    mlm_outputs = None
+    # extract first sent
+    first_sentence_input_ids = input_ids[:, 0, :]
+    first_sentence_attention_mask = attention_mask[:, 0, :]
+    
+    # extract second and third sent
+    input_ids = input_ids[:,1:,:]
+    attention_mask = attention_mask[:,1:,:]
     
   
-    # Training
-    if training_args.do_train:
-        model_path = (
-            model_args.model_name_or_path
-            if (model_args.model_name_or_path is not None and os.path.isdir(model_args.model_name_or_path))
-            else None
-        )
-        train_result = trainer.train(model_path=model_path)
-        trainer.save_model()  # Saves the tokenizer too for easy upload
-
-        output_train_file = os.path.join(training_args.output_dir, "train_results.txt")
-        if trainer.is_world_process_zero():
-            with open(output_train_file, "w") as writer:
-                logger.info("***** Train results *****")
-                for key, value in sorted(train_result.metrics.items()):
-                    logger.info(f"  {key} = {value}")
-                    writer.write(f"{key} = {value}\n")
-
-            # Need to save the state, since Trainer.save_model saves only the tokenizer with the model
-            trainer.state.save_to_json(os.path.join(training_args.output_dir, "trainer_state.json"))
-
-    # Evaluation
-    results = {}
-    if training_args.do_eval:
-        logger.info("*** Evaluate ***")
-        results = trainer.evaluate(eval_senteval_transfer=True)
-
-        output_eval_file = os.path.join(training_args.output_dir, "eval_results.txt")
-        if trainer.is_world_process_zero():
-            with open(output_eval_file, "w") as writer:
-                logger.info("***** Eval results *****")
-                for key, value in sorted(results.items()):
-                    logger.info(f"  {key} = {value}")
-                    writer.write(f"{key} = {value}\n")
-    part1 = "python3.7 evaluation.py"
-    part2 = "--model_name_or_path result/my-sup-simcse-bert-base-uncased" +str(alpha)
-    part3 = "--pooler cls_before_pooler"
-    part4 = "--task_set sts"
-    part5 = "--mode test"
-    command = f"{part1} {part2} {part3} {part4} {part5}"
-    directory_path = training_args.output_dir
-
-    # Save all files in the directory to wandb
-    if wandb_on:
-        wandb.save(os.path.join(directory_path, '*'))
-
-    os.system(command)
-    return results
-
-def _mp_fn(index):
-    # For xla_spawn (TPUs)
-    main()
-
-
-if __name__ == "__main__":
-    wandb_on = False
-    optuna_on = True
-    if wandb_on:
-        sweep_config = dict()
-        sweep_config['method'] = 'grid'
-        sweep_config['metric'] = {'name': 'test_accuracy', 'goal': 'maximize'}
-        sweep_config['parameters'] = {'alpha' : {'values' : [0.5]}, 'K_iter':{'values':[1]}, 'radius':{'values':[5]}}
-        sweep_id = wandb.sweep(sweep_config, project = 'Adversarial_SimCSE')
-        wandb.agent(sweep_id, main)
-    elif optuna_on:
-         study = optuna.create_study(study_name = 'simcse_adv', storage= "sqlite:///example.db",load_if_exists= True,
-                                direction ="maximize")
-        
-        study.optimize(main, n_trials = 100)
-        trials = study.best_trial
-        print("value: ", trials.value)
-        print("parmas :")
-        for k, v in trials.params.items():
-            print("   {}:      {}".format(k,v))
+    # Flatten input for encoding
+    input_ids = input_ids.reshape((-1, input_ids.size(-1))) # (bs * num_sent, len)
+    attention_mask = attention_mask.reshape((-1, attention_mask.size(-1))) # (bs * num_sent len)
+    if token_type_ids is not None:
+        first_token = token_type_ids[:,0,:]
+        token_type_ids = token_type_ids[:,1:,:]
+        token_type_ids = token_type_ids.reshape((-1, token_type_ids.size(-1))) # (bs * num_sent, len)
     else:
-        main()
+        first_token = None
+
+
+    # Get raw embeddings
+    outputs = encoder(
+        input_ids,
+        attention_mask=attention_mask,
+        token_type_ids=token_type_ids,
+        position_ids=position_ids,
+        head_mask=head_mask,
+        inputs_embeds=inputs_embeds,
+        output_attentions=output_attentions,
+        output_hidden_states=True if cls.model_args.pooler_type in ['avg_top2', 'avg_first_last'] else False,
+        return_dict=True,
+    )
+  
+    first_output= encoder(
+        first_sentence_input_ids,
+        attention_mask=first_sentence_attention_mask,
+        token_type_ids=first_token,
+        position_ids=position_ids,
+        head_mask=head_mask,
+        inputs_embeds=inputs_embeds,
+        output_attentions=output_attentions,
+        output_hidden_states=True if cls.model_args.pooler_type in ['avg_top2', 'avg_first_last'] else False,
+        return_dict=True,
+    )
+
+    # MLM auxiliary objective
+    if mlm_input_ids is not None:
+        mlm_input_ids = mlm_input_ids.view((-1, mlm_input_ids.size(-1)))
+        mlm_outputs = encoder(
+            mlm_input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=True if cls.model_args.pooler_type in ['avg_top2', 'avg_first_last'] else False,
+            return_dict=True,
+        )
+
+    # Pooling
+    pooler_output = cls.pooler(attention_mask, outputs)
+    first_pooled = cls.pooler(first_sentence_attention_mask, first_output)
+    pooler_output = pooler_output.view((batch_size, 2, pooler_output.size(-1))) # (bs, num_sent, hidden)
+    z1 = cls.mlp(first_pooled)
+    # If using "cls", we add an extra MLP layer
+    # (same as BERT's original implementation) over the representation.
+    if cls.pooler_type == "cls":
+        pooler_output = cls.mlp(pooler_output)
+
+    # Separate representation
+    z2 = pooler_output[:, 0]
+
+    # Hard negative
+    if num_sent == 3:
+        z3 = pooler_output[:, 1]
+
+    # Gather all embeddings if using distributed training
+    if dist.is_initialized() and cls.training:
+        # Gather hard negative
+        if num_sent >= 3:
+            z3_list = [torch.zeros_like(z3) for _ in range(dist.get_world_size())]
+            dist.all_gather(tensor_list=z3_list, tensor=z3.contiguous())
+            z3_list[dist.get_rank()] = z3
+            z3 = torch.cat(z3_list, 0)
+
+        # Dummy vectors for allgather
+        z1_list = [torch.zeros_like(z1) for _ in range(dist.get_world_size())]
+        z2_list = [torch.zeros_like(z2) for _ in range(dist.get_world_size())]
+        # Allgather
+        dist.all_gather(tensor_list=z1_list, tensor=z1.contiguous())
+        dist.all_gather(tensor_list=z2_list, tensor=z2.contiguous())
+
+        # Since allgather results do not have gradients, we replace the
+        # current process's corresponding embeddings with original tensors
+        z1_list[dist.get_rank()] = z1
+        z2_list[dist.get_rank()] = z2
+        # Get full batch embeddings: (bs x N, hidden)
+        z1 = torch.cat(z1_list, 0)
+        z2 = torch.cat(z2_list, 0)
+
+    cos_sim = cls.sim(z1.unsqueeze(1), z2.unsqueeze(0))
+    # Hard negative
+    if num_sent >= 3:
+        z1_z3_cos = cls.sim(z1.unsqueeze(1), z3.unsqueeze(0))
+        cos_sim = torch.cat([cos_sim, z1_z3_cos], 1)
+
+    labels = torch.arange(cos_sim.size(0)).long().to(cls.device)
+    loss_fct = nn.CrossEntropyLoss()
+
+
+    # Calculate loss with hard negatives
+    if num_sent == 3:
+        # Note that weights are actually logits of weights
+        z3_weight = cls.model_args.hard_negative_weight
+        weights = torch.tensor(
+            [[0.0] * (cos_sim.size(-1) - z1_z3_cos.size(-1)) + [0.0] * i + [z3_weight] + [0.0] * (z1_z3_cos.size(-1) - i - 1) for i in range(z1_z3_cos.size(-1))]
+        ).to(cls.device)
+        cos_sim = cos_sim + weights
+
+
+    alpha = cls.model_args.alpha
+    radius = cls.model_args.radius
+    reduction = cls.model_args.reduction
+    step_size = cls.model_args.step_size
+        
+    z1_emb =first_output.last_hidden_state[:,0,:]
+    loss_adv = cls.smart_loss(z1_emb,z1,radius,step_size,reduction)
     
+    loss_cont = loss_fct(cos_sim, labels)
+    loss = (alpha-1)*loss_cont + alpha*loss_adv
 
 
+    # Calculate loss for MLM
+    if mlm_outputs is not None and mlm_labels is not None:
+        mlm_labels = mlm_labels.view(-1, mlm_labels.size(-1))
+        prediction_scores = cls.lm_head(mlm_outputs.last_hidden_state)
+        masked_lm_loss = loss_fct(prediction_scores.view(-1, cls.config.vocab_size), mlm_labels.view(-1))
+        loss = loss + cls.model_args.mlm_weight * masked_lm_loss
+
+    if not return_dict:
+        output = (cos_sim,) + outputs[2:]
+        return ((loss,) + output) if loss is not None else output
+    return SequenceClassifierOutput(
+        loss=loss,
+        logits=cos_sim,
+        hidden_states=outputs.hidden_states,
+        attentions=outputs.attentions,
+    )
+
+
+def sentemb_forward(
+    cls,
+    encoder,
+    input_ids=None,
+    attention_mask=None,
+    token_type_ids=None,
+    position_ids=None,
+    head_mask=None,
+    inputs_embeds=None,
+    labels=None,
+    output_attentions=None,
+    output_hidden_states=None,
+    return_dict=None,
+):
+
+    return_dict = return_dict if return_dict is not None else cls.config.use_return_dict
+
+    outputs = encoder(
+        input_ids,
+        attention_mask=attention_mask,
+        token_type_ids=token_type_ids,
+        position_ids=position_ids,
+        head_mask=head_mask,
+        inputs_embeds=inputs_embeds,
+        output_attentions=output_attentions,
+        output_hidden_states=True if cls.pooler_type in ['avg_top2', 'avg_first_last'] else False,
+        return_dict=True,
+    )
+
+    pooler_output = cls.pooler(attention_mask, outputs)
+    if cls.pooler_type == "cls" and not cls.model_args.mlp_only_train:
+        pooler_output = cls.mlp(pooler_output)
+
+    if not return_dict:
+        return (outputs[0], pooler_output) + outputs[2:]
+
+    return BaseModelOutputWithPoolingAndCrossAttentions(
+        pooler_output=pooler_output,
+        last_hidden_state=outputs.last_hidden_state,
+        hidden_states=outputs.hidden_states,
+    )
+
+
+class BertForCL(BertPreTrainedModel):
+    _keys_to_ignore_on_load_missing = [r"position_ids"]
+
+    def __init__(self, config, *model_args, **model_kargs):
+        super().__init__(config)
+        self.model_args = model_kargs["model_args"]
+        self.bert = BertModel(config, add_pooling_layer=False)
+
+        if self.model_args.do_mlm:
+            self.lm_head = BertLMPredictionHead(config)
+
+        cl_init(self, config)
+
+    def forward(self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        labels=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+        sent_emb=False,
+        mlm_input_ids=None,
+        mlm_labels=None,
+    ):
+        if sent_emb:
+            return sentemb_forward(self, self.bert,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                position_ids=position_ids,
+                head_mask=head_mask,
+                inputs_embeds=inputs_embeds,
+                labels=labels,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
+        else:
+            return cl_forward(self, self.bert,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                position_ids=position_ids,
+                head_mask=head_mask,
+                inputs_embeds=inputs_embeds,
+                labels=labels,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+                mlm_input_ids=mlm_input_ids,
+                mlm_labels=mlm_labels,
+            )
+
+
+
+class RobertaForCL(RobertaPreTrainedModel):
+    _keys_to_ignore_on_load_missing = [r"position_ids"]
+
+    def __init__(self, config, *model_args, **model_kargs):
+        super().__init__(config)
+        self.model_args = model_kargs["model_args"]
+        self.roberta = RobertaModel(config, add_pooling_layer=False)
+
+        if self.model_args.do_mlm:
+            self.lm_head = RobertaLMHead(config)
+
+        cl_init(self, config)
+
+    def forward(self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        labels=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+        sent_emb=False,
+        mlm_input_ids=None,
+        mlm_labels=None,
+    ):
+        if sent_emb:
+            return sentemb_forward(self, self.roberta,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                position_ids=position_ids,
+                head_mask=head_mask,
+                inputs_embeds=inputs_embeds,
+                labels=labels,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
+        else:
+            return cl_forward(self, self.roberta,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                position_ids=position_ids,
+                head_mask=head_mask,
+                inputs_embeds=inputs_embeds,
+                labels=labels,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+                mlm_input_ids=mlm_input_ids,
+                mlm_labels=mlm_labels,
+            )
