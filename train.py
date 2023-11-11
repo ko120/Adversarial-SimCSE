@@ -31,6 +31,7 @@ from transformers import (
     BertForPreTraining,
     RobertaModel
 )
+import optuna
 from transformers.tokenization_utils_base import BatchEncoding, PaddingStrategy, PreTrainedTokenizerBase
 from transformers.trainer_utils import is_main_process
 from transformers.data.data_collator import DataCollatorForLanguageModeling
@@ -245,7 +246,7 @@ class OurTrainingArguments(TrainingArguments):
         return device
 
 
-def main():
+def main(trial= None):
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
@@ -254,9 +255,17 @@ def main():
         cfig = wandb.config
         alpha = cfig.alpha
         radius = cfig.radius
+    elif optuna_on:
+        alpha = trial.suggest_float('alpha',0.1, 1)
+        radius = trial.suggest_float('radius',1, 10)
+        step_size = trial.suggest_float('step_size', 1e-5,1e-3,log=True)
+        reduction = trial.suggest_categorical("reduction", ["sum", "batchmean"])
     else:
         alpha = 0.5
         radius = 5
+        step_size = 1e-3
+        reduction = "sum"
+        
     
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, OurTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
@@ -549,6 +558,9 @@ def main():
     )
     model_args.alpha = alpha
     model_args.radius = radius
+    model_args.step_size = step_size
+    model_arggs.reduction = reduction
+
     trainer.model_args = model_args
     
   
@@ -607,7 +619,8 @@ def _mp_fn(index):
 
 
 if __name__ == "__main__":
-    wandb_on = True
+    wandb_on = False
+    optuna_on = True
     if wandb_on:
         sweep_config = dict()
         sweep_config['method'] = 'grid'
@@ -615,7 +628,18 @@ if __name__ == "__main__":
         sweep_config['parameters'] = {'alpha' : {'values' : [0.5]}, 'K_iter':{'values':[1]}, 'radius':{'values':[5]}}
         sweep_id = wandb.sweep(sweep_config, project = 'Adversarial_SimCSE')
         wandb.agent(sweep_id, main)
+    elif optuna_on:
+         study = optuna.create_study(study_name = 'simcse_adv', storage= "sqlite:///example.db",load_if_exists= True,
+                                direction ="maximize")
+        
+        study.optimize(main, n_trials = 100)
+        trials = study.best_trial
+        print("value: ", trials.value)
+        print("parmas :")
+        for k, v in trials.params.items():
+            print("   {}:      {}".format(k,v))
     else:
         main()
+    
 
 
