@@ -395,7 +395,7 @@ def cl_forward(cls,
     loss_adv = cls.smart_loss(z1_emb,z1,radius,step_size,reduction)
     
     loss_cont = loss_fct(cos_sim, labels)
-    loss = (alpha-1)*loss_cont + alpha*loss_adv
+    loss = (1-alpha)*loss_cont + alpha*loss_adv
 
 
     # Calculate loss for MLM
