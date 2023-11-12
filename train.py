@@ -8,9 +8,9 @@ import torch
 import collections
 import random
 import pdb
+import optuna
 from datasets import load_dataset
 import wandb
-
 import transformers
 from transformers import (
     CONFIG_MAPPING,
@@ -31,7 +31,6 @@ from transformers import (
     BertForPreTraining,
     RobertaModel
 )
-import optuna
 from transformers.tokenization_utils_base import BatchEncoding, PaddingStrategy, PreTrainedTokenizerBase
 from transformers.trainer_utils import is_main_process
 from transformers.data.data_collator import DataCollatorForLanguageModeling
@@ -246,6 +245,7 @@ class OurTrainingArguments(TrainingArguments):
         return device
 
 
+
 def main(trial= None):
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -256,8 +256,8 @@ def main(trial= None):
         alpha = cfig.alpha
         radius = cfig.radius
     elif optuna_on:
-        alpha = trial.suggest_float('alpha',0.1, 1)
-        radius = trial.suggest_float('radius',1, 10)
+        alpha = trial.suggest_categorical('alpha',[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1])
+        radius = trial.suggest_int('radius',1, 10)
         step_size = trial.suggest_float('step_size', 1e-5,1e-3,log=True)
         reduction = trial.suggest_categorical("reduction", ["sum", "batchmean"])
     else:
@@ -266,7 +266,7 @@ def main(trial= None):
         step_size = 1e-3
         reduction = "sum"
         
-    
+    print("Alpha: {}, Radius: {}, step_size: {}, reduction: {}".format(alpha, radius, step_size, reduction))
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, OurTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
@@ -559,11 +559,10 @@ def main(trial= None):
     model_args.alpha = alpha
     model_args.radius = radius
     model_args.step_size = step_size
-    model_arggs.reduction = reduction
+    model_args.reduction = reduction
 
     trainer.model_args = model_args
-    
-  
+
     # Training
     if training_args.do_train:
         model_path = (
@@ -571,7 +570,8 @@ def main(trial= None):
             if (model_args.model_name_or_path is not None and os.path.isdir(model_args.model_name_or_path))
             else None
         )
-        train_result = trainer.train(model_path=model_path)
+        # Need to input trial to train function to prune
+        train_result = trainer.train(model_path=model_path,trial=trial)
         trainer.save_model()  # Saves the tokenizer too for easy upload
 
         output_train_file = os.path.join(training_args.output_dir, "train_results.txt")
@@ -590,7 +590,7 @@ def main(trial= None):
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
         results = trainer.evaluate(eval_senteval_transfer=True)
-
+        
         output_eval_file = os.path.join(training_args.output_dir, "eval_results.txt")
         if trainer.is_world_process_zero():
             with open(output_eval_file, "w") as writer:
@@ -609,9 +609,9 @@ def main(trial= None):
     # Save all files in the directory to wandb
     if wandb_on:
         wandb.save(os.path.join(directory_path, '*'))
-
+    
     os.system(command)
-    return results
+    return results['eval_stsb_spearman']
 
 def _mp_fn(index):
     # For xla_spawn (TPUs)
@@ -629,9 +629,8 @@ if __name__ == "__main__":
         sweep_id = wandb.sweep(sweep_config, project = 'Adversarial_SimCSE')
         wandb.agent(sweep_id, main)
     elif optuna_on:
-         study = optuna.create_study(study_name = 'simcse_adv', storage= "sqlite:///example.db",load_if_exists= True,
+        study = optuna.create_study(study_name = 'simcse_adv', storage= "sqlite:///example.db",load_if_exists= True,
                                 direction ="maximize")
-        
         study.optimize(main, n_trials = 100)
         trials = study.best_trial
         print("value: ", trials.value)
@@ -641,5 +640,3 @@ if __name__ == "__main__":
     else:
         main()
     
-
-
