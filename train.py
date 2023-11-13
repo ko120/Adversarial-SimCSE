@@ -37,6 +37,8 @@ from transformers.data.data_collator import DataCollatorForLanguageModeling
 from transformers.file_utils import cached_property, torch_required, is_torch_available, is_torch_tpu_available
 from simcse.models import RobertaForCL, BertForCL
 from simcse.trainers import CLTrainer
+import evaluation
+from evaluation import last_eval
 
 logger = logging.getLogger(__name__)
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_MASKED_LM_MAPPING.keys())
@@ -265,7 +267,7 @@ def main(trial= None):
         radius = 5
         step_size = 1e-3
         reduction = "sum"
-        
+
     print("Alpha: {}, Radius: {}, step_size: {}, reduction: {}".format(alpha, radius, step_size, reduction))
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, OurTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
@@ -599,20 +601,26 @@ def main(trial= None):
                 for key, value in sorted(results.items()):
                     logger.info(f"  {key} = {value}")
                     writer.write(f"{key} = {value}\n")
-    part1 = "python3.7 evaluation.py"
-    part2 = "--model_name_or_path result/my-sup-simcse-bert-base-uncased" +str(alpha)
-    part3 = "--pooler cls_before_pooler"
-    part4 = "--task_set sts"
-    part5 = "--mode test"
-    command = f"{part1} {part2} {part3} {part4} {part5}"
+
+    model_name = 'result/my-sup-simcse-bert-base-uncased' +str(alpha)
+    cls_type = 'cls_before_pooler'
+    tasks = 'sts'
+    mode_ = 'test'
+
+    avg_score = last_eval(model_name_or_path=model_name, pooler= cls_type,mode = mode_, task_set= tasks)
+    # part1 = "python3.7 evaluation.py"
+    # part2 = "--model_name_or_path result/my-sup-simcse-bert-base-uncased" +str(alpha)
+    # part3 = "--pooler cls_before_pooler"
+    # part4 = "--task_set sts"
+    # part5 = "--mode test"
+    # command = f"{part1} {part2} {part3} {part4} {part5}"
     directory_path = training_args.output_dir
 
     # Save all files in the directory to wandb
     if wandb_on:
         wandb.save(os.path.join(directory_path, '*'))
-    
-    os.system(command)
-    return results['eval_stsb_spearman']
+    # os.system(command)
+    return avg_score
 
 def _mp_fn(index):
     # For xla_spawn (TPUs)
