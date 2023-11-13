@@ -642,7 +642,7 @@ if __name__ == "__main__":
         sweep_id = wandb.sweep(sweep_config, project = 'Adversarial_SimCSE')
         wandb.agent(sweep_id, main)
     elif optuna_on:
-        study = optuna.create_study(study_name = 'simcse_adv_wandb_2',load_if_exists= True,
+        study = optuna.create_study(study_name = 'simcse_adv_wandb_2',storage="sqlite:///db.sqlite3", load_if_exists= True,
                                 direction ="maximize")
     
         study.optimize(main, n_trials = 50)
