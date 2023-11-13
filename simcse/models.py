@@ -138,7 +138,6 @@ class SMARTLoss(nn.Module):
             if i == self.num_steps:
                 return self.loss_last_fn(input = state , target = state_perturbed, reduction = reduction)
             
-       
             loss = self.loss_fn(F.log_softmax(state, dim=-1, dtype=torch.float32),F.softmax(state_perturbed, dim=-1, dtype=torch.float32))
             # Compute noise gradient ∂loss/∂noise
             (noise_gradient,) = torch.autograd.grad(loss, noise, only_inputs=True, retain_graph=False,allow_unused=True)
@@ -238,8 +237,10 @@ def cl_init(cls, config):
         cls.mlp = MLPLayer(config)
     cls.sim = Similarity(temp=cls.model_args.temp)
     cls.init_weights()
-    kl_loss = torch.nn.KLDivLoss(reduction = "batchmean")
+    kl_loss = torch.nn.KLDivLoss(reduction = 'batchmean')
     cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = kl_loss, loss_last_fn =sym_kl_loss)
+    
+    
 
 def cl_forward(cls,
     encoder,
@@ -385,12 +386,13 @@ def cl_forward(cls,
         ).to(cls.device)
         cos_sim = cos_sim + weights
 
-
+ 
     alpha = cls.model_args.alpha
     radius = cls.model_args.radius
     reduction = cls.model_args.reduction
     step_size = cls.model_args.step_size
-        
+    
+    
     z1_emb =first_output.last_hidden_state[:,0,:]
     loss_adv = cls.smart_loss(z1_emb,z1,radius,step_size,reduction)
     
