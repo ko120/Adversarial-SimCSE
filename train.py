@@ -620,9 +620,9 @@ def main(trial= None):
     directory_path = training_args.output_dir
 
     # Save all files in the directory to wandb
-
-    if float(results["eval_stsb_spearman"]) > float(study.best_value):
-        wandb.save(os.path.join(directory_path, '*'))
+    if len(study.trials) > 0 and study.best_trial is not None:
+        if float(results["eval_stsb_spearman"]) > float(study.best_value):
+            wandb.save(os.path.join(directory_path, '*'))
     # os.system(command)
     wandb.log({'avg_score':avg_score})
     return results["eval_stsb_spearman"]
@@ -643,7 +643,7 @@ if __name__ == "__main__":
         sweep_id = wandb.sweep(sweep_config, project = 'Adversarial_SimCSE')
         wandb.agent(sweep_id, main)
     elif optuna_on:
-        study = optuna.create_study(study_name = 'simcse_adv_wandb_7',storage="sqlite:///db.sqlite7",load_if_exists= True,
+        study = optuna.create_study(study_name = 'simcse_adv_wandb_8',storage="sqlite:///db.sqlite8",load_if_exists= True,
                                 direction ="maximize")
     
         study.optimize(main, n_trials = 50)
