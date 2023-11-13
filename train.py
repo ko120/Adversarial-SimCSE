@@ -255,12 +255,12 @@ def main(trial= None):
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
     if wandb_on:
-        wandb.init(project = 'adv_simcse_optuna')
+        wandb.init()
         cfig = wandb.config
         alpha = cfig.alpha
         radius = cfig.radius
     elif optuna_on:
-        wandb.init(project = 'adv_simcse_optuna')
+        wandb.init()
         alpha = trial.suggest_categorical('alpha',[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1])
         radius = trial.suggest_int('radius',1, 10)
         step_size = trial.suggest_float('step_size', 1e-5,1e-3,log=True)
