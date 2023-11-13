@@ -9,6 +9,7 @@ import collections
 import random
 import pdb
 import optuna
+from optuna.integration.wandb import WeightsAndBiasesCallback
 from datasets import load_dataset
 import wandb
 import transformers
@@ -39,6 +40,7 @@ from simcse.models import RobertaForCL, BertForCL
 from simcse.trainers import CLTrainer
 import evaluation
 from evaluation import last_eval
+
 
 logger = logging.getLogger(__name__)
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_MASKED_LM_MAPPING.keys())
@@ -253,15 +255,17 @@ def main(trial= None):
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
     if wandb_on:
-        wandb.init()
+        wandb.init(project = 'adv_simcse_optuna')
         cfig = wandb.config
         alpha = cfig.alpha
         radius = cfig.radius
     elif optuna_on:
+        wandb.init(project = 'adv_simcse_optuna')
         alpha = trial.suggest_categorical('alpha',[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1])
         radius = trial.suggest_int('radius',1, 10)
         step_size = trial.suggest_float('step_size', 1e-5,1e-3,log=True)
         reduction = trial.suggest_categorical("reduction", ["sum", "batchmean"])
+        wandb.log({'alpha' : alpha, 'radius': radius, 'step_size':step_size, 'reduction':reduction})
     else:
         alpha = 0.5
         radius = 5
@@ -287,7 +291,7 @@ def main(trial= None):
             f"Output directory ({training_args.output_dir}) already exists and is not empty."
             "Use --overwrite_output_dir to overcome."
         )
-    training_args.output_dir += str( alpha)
+    # training_args.output_dir += str(alpha)
     # Setup logging
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
@@ -601,8 +605,7 @@ def main(trial= None):
                 for key, value in sorted(results.items()):
                     logger.info(f"  {key} = {value}")
                     writer.write(f"{key} = {value}\n")
-
-    model_name = 'result/my-sup-simcse-bert-base-uncased' +str(alpha)
+    model_name = training_args.output_dir
     cls_type = 'cls_before_pooler'
     tasks = 'sts'
     mode_ = 'test'
@@ -617,9 +620,10 @@ def main(trial= None):
     directory_path = training_args.output_dir
 
     # Save all files in the directory to wandb
-    if wandb_on:
-        wandb.save(os.path.join(directory_path, '*'))
+    
+    wandb.save(os.path.join(directory_path, '*'))
     # os.system(command)
+    wandb.log({'avg_score':avg_score})
     return avg_score
 
 def _mp_fn(index):
@@ -638,9 +642,10 @@ if __name__ == "__main__":
         sweep_id = wandb.sweep(sweep_config, project = 'Adversarial_SimCSE')
         wandb.agent(sweep_id, main)
     elif optuna_on:
-        study = optuna.create_study(study_name = 'simcse_adv_real', storage= "sqlite:///example.db",load_if_exists= True,
+        study = optuna.create_study(study_name = 'simcse_adv_wandb_2',load_if_exists= True,
                                 direction ="maximize")
-        study.optimize(main, n_trials = 100)
+    
+        study.optimize(main, n_trials = 50)
         trials = study.best_trial
         print("value: ", trials.value)
         print("parmas :")
