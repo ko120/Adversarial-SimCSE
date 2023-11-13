@@ -549,6 +549,7 @@ def main(trial= None):
 
     data_collator = default_data_collator if data_args.pad_to_max_length else OurDataCollatorWithPadding(tokenizer)
 
+
     trainer = CLTrainer(
         model=model,
         args=training_args,
@@ -629,7 +630,7 @@ if __name__ == "__main__":
         sweep_id = wandb.sweep(sweep_config, project = 'Adversarial_SimCSE')
         wandb.agent(sweep_id, main)
     elif optuna_on:
-        study = optuna.create_study(study_name = 'simcse_adv', storage= "sqlite:///example.db",load_if_exists= True,
+        study = optuna.create_study(study_name = 'simcse_adv_real', storage= "sqlite:///example.db",load_if_exists= True,
                                 direction ="maximize")
         study.optimize(main, n_trials = 100)
         trials = study.best_trial
