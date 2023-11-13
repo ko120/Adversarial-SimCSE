@@ -155,7 +155,6 @@ class CLTrainer(Trainer):
         self.objective = metrics['eval_stsb_spearman']
         if self.hp_search_backend == HPSearchBackend.OPTUNA:
             import optuna
-            pdb.set_trace()
             trial.report(self.objective, epoch)
             if trial.should_prune():
                 raise optuna.TrialPruned()
