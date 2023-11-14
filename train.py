@@ -261,10 +261,10 @@ def main(trial= None):
         radius = cfig.radius
     elif optuna_on:
         wandb.init()
-        alpha = trial.suggest_categorical('alpha',[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1])
+        alpha = trial.suggest_categorical('alpha',[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9])
         radius = trial.suggest_int('radius',1, 10)
-        step_size = trial.suggest_float('step_size', 1e-5,1e-3,log=True)
-        reduction = trial.suggest_categorical("reduction", ["sum", "batchmean"])
+        step_size = trial.suggest_categorical('alpha',[1e-4,2e-4,3e-4,4e-4,5e-4])
+        reduction = trial.suggest_categorical("reduction", ["sum"])
         wandb.log({'alpha' : alpha, 'radius': radius, 'step_size':step_size, 'reduction':reduction})
     else:
         alpha = 0.5
@@ -643,10 +643,10 @@ if __name__ == "__main__":
         sweep_id = wandb.sweep(sweep_config, project = 'Adversarial_SimCSE')
         wandb.agent(sweep_id, main)
     elif optuna_on:
-        study = optuna.create_study(study_name = 'simcse_adv_wandb_9',storage="sqlite:///db.sqlite9",load_if_exists= True,
+        study = optuna.create_study(study_name = 'simcse_adv_wandb_10',storage="sqlite:///db.sqlite10",load_if_exists= True,
                                 direction ="maximize")
     
-        study.optimize(main, n_trials = 50)
+        study.optimize(main, n_trials = 100)
         trials = study.best_trial
         print("value: ", trials.value)
         print("parmas :")
