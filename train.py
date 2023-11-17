@@ -261,18 +261,20 @@ def main(trial= None):
         radius = cfig.radius
     elif optuna_on:
         wandb.init()
-        alpha = trial.suggest_categorical('alpha',[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9])
-        radius = trial.suggest_int('radius',1, 10)
-        step_size = trial.suggest_categorical('step_size',[1e-4,2e-4,3e-4,4e-4,5e-4])
+        alpha = trial.suggest_categorical('alpha',[0.1,0.3,0.5,0.7,0.9])
+        radius = trial.suggest_categorical('radius',[1,2,3])
+        step_size = trial.suggest_categorical('step_size',[1e-3])
+        learning_rate =  trial.suggest_categorical('learning_rate',[3e-5])
         reduction = "sum"
-        wandb.log({'alpha' : alpha, 'radius': radius, 'step_size':step_size, 'reduction':reduction})
+        wandb.log({'alpha' : alpha, 'radius': radius, 'step_size':step_size, 'reduction':reduction, 'lr': learning_rate})
     else:
-        alpha = 0.5
-        radius = 5
-        step_size = 1e-3
+        alpha = 0.7
+        radius = 1
+        step_size = 3e-5
         reduction = "sum"
+        learning_rate = 3e-5
 
-    print("Alpha: {}, Radius: {}, step_size: {}, reduction: {}".format(alpha, radius, step_size, reduction))
+    print("Alpha: {}, Radius: {}, step_size: {}, reduction: {}, lr {}".format(alpha, radius, step_size, reduction, learning_rate))
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, OurTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
@@ -555,7 +557,8 @@ def main(trial= None):
 
     data_collator = default_data_collator if data_args.pad_to_max_length else OurDataCollatorWithPadding(tokenizer)
 
-
+    
+    training_args.learning_rate = learning_rate
     trainer = CLTrainer(
         model=model,
         args=training_args,
@@ -624,6 +627,7 @@ def main(trial= None):
     #     if float(results["eval_stsb_spearman"]) > float(study.best_value):
     #         wandb.save(os.path.join(directory_path, '*'))
     # os.system(command)
+    # wandb.save(os.path.join(directory_path, '*'))
     wandb.log({'avg_score':avg_score})
     return results["eval_stsb_spearman"]
 
@@ -643,10 +647,15 @@ if __name__ == "__main__":
         sweep_id = wandb.sweep(sweep_config, project = 'Adversarial_SimCSE')
         wandb.agent(sweep_id, main)
     elif optuna_on:
-        study = optuna.create_study(study_name = 'simcse_adv_wandb_10',storage="sqlite:///db.sqlite10",load_if_exists= True,
-                                direction ="maximize")
+        search_space = {'alpha':[0.1,0.3,0.5,0.7,0.9],'radius':[1,2,3], 'learning_rate':[3e-5]}
+        sampler=optuna.samplers.GridSampler(search_space)
+        study = optuna.create_study(study_name = 'roberta-various-radius3',storage="sqlite:///db.sqlite23",load_if_exists= True,
+                                direction ="maximize",sampler =sampler)
+        study.optimize(main, n_trials = 15)
+        # study = optuna.create_study(study_name = 'simcse_adv_wandb_13',storage="sqlite:///db.sqlite13",load_if_exists= True,
+        #                         direction ="maximize")
     
-        study.optimize(main, n_trials = 100)
+        # study.optimize(main, n_trials = 100)
         trials = study.best_trial
         print("value: ", trials.value)
         print("parmas :")
