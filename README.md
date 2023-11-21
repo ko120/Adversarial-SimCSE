@@ -13,6 +13,8 @@ pip install wandb optuna # For logging and hyperparameter tuning purpose
 
 # Downloading the datasets
 
+Those datasets are obtained from original SimCSE work.
+
 For SentEval(Evaluation data)
 ```
 cd Adversarial-SimCSE/SentEval/data/downstream
