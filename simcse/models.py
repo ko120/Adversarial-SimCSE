@@ -100,6 +100,19 @@ def js_loss(input, target, reduction='batchmean', alpha=0.5):
         )
         return loss * alpha
     
+def sim_loss(x1,x2,device): # NTX Loss
+    t = 0.05
+    pred_label = []
+    true_label = []
+
+    sim_pos = torch.nn.functional.cosine_similarity(x1.unsqueeze(1),x2.unsqueeze(0),dim=-1).to(device) / t
+
+    cos_sim = sim_pos
+    
+    loss_fn = torch.nn.CrossEntropyLoss()
+    labels = torch.arange(cos_sim.size(0)).long().to(device)
+    contr_loss = loss_fn(cos_sim, labels)
+    return contr_loss
 
 class SMARTLoss(nn.Module):
 
@@ -107,6 +120,7 @@ class SMARTLoss(nn.Module):
         self,
         eval_fn: Callable,
         loss_fn: Callable,
+        device,
         loss_last_fn: Callable = None,
         norm_fn: Callable = inf_norm,
         num_steps: int = 1,
@@ -123,6 +137,7 @@ class SMARTLoss(nn.Module):
         self.step_size = step_size
         self.epsilon = epsilon
         self.noise_var = noise_var
+        self.device = device
     
     def forward(self, embed: Tensor, state: Tensor, radius, step_size, reduction) -> Tensor:
         
@@ -134,11 +149,13 @@ class SMARTLoss(nn.Module):
             # Compute perturbed embed and states
             embed_perturbed = embed + noise
             state_perturbed = self.eval_fn(embed_perturbed)
-          
+         
             if i == self.num_steps:
-                return self.loss_last_fn(input = state , target = state_perturbed, reduction = reduction)
+                # return self.loss_last_fn(input = state , target = state_perturbed, reduction = reduction)
+                return self.loss_fn(state, state_perturbed)
             
-            loss = self.loss_fn(F.log_softmax(state, dim=-1, dtype=torch.float32),F.softmax(state_perturbed, dim=-1, dtype=torch.float32))
+            # loss = self.loss_fn(F.log_softmax(state, dim=-1, dtype=torch.float32),F.softmax(state_perturbed, dim=-1, dtype=torch.float32))
+            loss = self.loss_fn(state, state_perturbed) # try state.detach
             # Compute noise gradient ∂loss/∂noise
             (noise_gradient,) = torch.autograd.grad(loss, noise, only_inputs=True, retain_graph=False,allow_unused=True)
             norm = noise_gradient.norm()
@@ -159,18 +176,21 @@ class MLPLayer(nn.Module):
     """
     Head for getting sentence representations over RoBERTa/BERT's CLS representation.
     """
-
     def __init__(self, config):
         super().__init__()
-        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
-        self.activation = nn.Tanh()
-        self.norm = nn.LayerNorm(config.hidden_size)
+        in_dim = config.hidden_size
+        hidden_dim = config.hidden_size * 2
+        out_dim = config.hidden_size
+        affine=False
+        list_layers = [nn.Linear(in_dim, hidden_dim, bias=False),
+                       nn.BatchNorm1d(hidden_dim),
+                       nn.ReLU(inplace=True)]
+        list_layers += [nn.Linear(hidden_dim, out_dim, bias=False),
+                        nn.BatchNorm1d(out_dim, affine=affine)]
+        self.net = nn.Sequential(*list_layers)
 
     def forward(self, features, **kwargs):
-        x = self.norm(features)
-        x = self.dense(x)
-        x = self.activation(x)
-        # x = self.norm(x)
+        x = self.net(features)
         return x
 
 class Similarity(nn.Module):
@@ -207,8 +227,6 @@ class Pooler(nn.Module):
         pooler_output = outputs.pooler_output
         hidden_states = outputs.hidden_states
 
-
-
         if self.pooler_type in ['cls_before_pooler', 'cls']:
             return last_hidden[:, 0]
         elif self.pooler_type == "avg":
@@ -238,10 +256,9 @@ def cl_init(cls, config):
     cls.sim = Similarity(temp=cls.model_args.temp)
     cls.init_weights()
     kl_loss = torch.nn.KLDivLoss(reduction = 'batchmean')
-    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = kl_loss, loss_last_fn =sym_kl_loss)
+    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = nn.MSELoss(), loss_last_fn= nn.MSELoss(),device= cls.device)
     
     
-
 def cl_forward(cls,
     encoder,
     input_ids=None,
@@ -259,32 +276,43 @@ def cl_forward(cls,
 ):
     return_dict = return_dict if return_dict is not None else cls.config.use_return_dict
     ori_input_ids = input_ids
+    ori_att = attention_mask
+    ori_tok = token_type_ids
     batch_size = input_ids.size(0)
     num_sent = input_ids.size(1)
     # Number of sentences in one instance
     # 2: pair instance; 3: pair instance with a hard negative
     
-
+    
     mlm_outputs = None
     # extract first sent
+
     first_sentence_input_ids = input_ids[:, 0, :]
     first_sentence_attention_mask = attention_mask[:, 0, :]
     
     # extract second and third sent
-    input_ids = input_ids[:,1:,:]
-    attention_mask = attention_mask[:,1:,:]
+    if num_sent == 2:
+        input_ids = input_ids[:,1,:]
+        attention_mask = attention_mask[:,1,:]
+    else:
+        input_ids = input_ids[:,1:,:]
+        attention_mask = attention_mask[:,1:,:]
+        input_ids = input_ids.reshape((-1, input_ids.size(-1))) # (bs * num_sent, len)
+        attention_mask = attention_mask.reshape((-1, attention_mask.size(-1))) # (bs * num_sent len)
     
-  
+
     # Flatten input for encoding
-    input_ids = input_ids.reshape((-1, input_ids.size(-1))) # (bs * num_sent, len)
-    attention_mask = attention_mask.reshape((-1, attention_mask.size(-1))) # (bs * num_sent len)
+ 
+
     if token_type_ids is not None:
         first_token = token_type_ids[:,0,:]
-        token_type_ids = token_type_ids[:,1:,:]
-        token_type_ids = token_type_ids.reshape((-1, token_type_ids.size(-1))) # (bs * num_sent, len)
+        if num_sent == 2:
+            token_type_ids = token_type_ids[:,1,:]
+        else:
+            token_type_ids = token_type_ids[:,1:,:]
+            token_type_ids = token_type_ids.reshape((-1, token_type_ids.size(-1))) # (bs * num_sent, len)
     else:
         first_token = None
-
 
     # Get raw embeddings
     outputs = encoder(
@@ -329,7 +357,9 @@ def cl_forward(cls,
     # Pooling
     pooler_output = cls.pooler(attention_mask, outputs)
     first_pooled = cls.pooler(first_sentence_attention_mask, first_output)
-    pooler_output = pooler_output.view((batch_size, 2, pooler_output.size(-1))) # (bs, num_sent, hidden)
+    if num_sent == 3:
+        pooler_output = pooler_output.view((batch_size, num_sent, pooler_output.size(-1))) # (bs, num_sent, hidden)
+    
     z1 = cls.mlp(first_pooled)
     # If using "cls", we add an extra MLP layer
     # (same as BERT's original implementation) over the representation.
@@ -337,7 +367,10 @@ def cl_forward(cls,
         pooler_output = cls.mlp(pooler_output)
 
     # Separate representation
-    z2 = pooler_output[:, 0]
+    if num_sent == 3:
+        z2 = pooler_output[:, 0]
+    else:
+        z2 = pooler_output
 
     # Hard negative
     if num_sent == 3:
@@ -392,12 +425,12 @@ def cl_forward(cls,
     reduction = cls.model_args.reduction
     step_size = cls.model_args.step_size
     
-    
     z1_emb =first_output.last_hidden_state[:,0,:]
     loss_adv = cls.smart_loss(z1_emb,z1,radius,step_size,reduction)
-    
+
     loss_cont = loss_fct(cos_sim, labels)
-    loss = (1-alpha)*loss_cont + alpha*loss_adv
+    loss = loss_cont + loss_adv*alpha
+
 
 
     # Calculate loss for MLM
