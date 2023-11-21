@@ -1,4 +1,5 @@
 import logging
+import os
 import math
 import os
 import sys
@@ -9,9 +10,9 @@ import collections
 import random
 import pdb
 import optuna
-from optuna.integration.wandb import WeightsAndBiasesCallback
 from datasets import load_dataset
 import wandb
+
 import transformers
 from transformers import (
     CONFIG_MAPPING,
@@ -261,20 +262,19 @@ def main(trial= None):
         radius = cfig.radius
     elif optuna_on:
         wandb.init()
-        alpha = trial.suggest_categorical('alpha',[0.1,0.3,0.5,0.7,0.9])
-        radius = trial.suggest_categorical('radius',[1,2,3])
+        alpha = trial.suggest_categorical('alpha',[0.00005, 0.00001, 0.000005, 0.000001, 0.0000005, 0.0000001])
+        radius = trial.suggest_categorical('radius',[1])
         step_size = trial.suggest_categorical('step_size',[1e-3])
         learning_rate =  trial.suggest_categorical('learning_rate',[3e-5])
         reduction = "sum"
-        wandb.log({'alpha' : alpha, 'radius': radius, 'step_size':step_size, 'reduction':reduction, 'lr': learning_rate})
     else:
-        alpha = 0.7
+        alpha = 0.0001
         radius = 1
-        step_size = 3e-5
+        step_size = 1e-3
         reduction = "sum"
         learning_rate = 3e-5
 
-    print("Alpha: {}, Radius: {}, step_size: {}, reduction: {}, lr {}".format(alpha, radius, step_size, reduction, learning_rate))
+    
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, OurTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
@@ -293,14 +293,15 @@ def main(trial= None):
             f"Output directory ({training_args.output_dir}) already exists and is not empty."
             "Use --overwrite_output_dir to overcome."
         )
-    # training_args.output_dir += str(alpha)
+ 
     # Setup logging
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
         level=logging.INFO if is_main_process(training_args.local_rank) else logging.WARN,
     )
-
+    training_args.output_dir = training_args.output_dir +str('2')
+    print(training_args.output_dir)
     # Log on each process the small summary:
     logger.warning(
         f"Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}"
@@ -608,27 +609,19 @@ def main(trial= None):
                 for key, value in sorted(results.items()):
                     logger.info(f"  {key} = {value}")
                     writer.write(f"{key} = {value}\n")
+  
     model_name = training_args.output_dir
     cls_type = 'cls_before_pooler'
     tasks = 'sts'
     mode_ = 'test'
 
-    avg_score = last_eval(model_name_or_path=model_name, pooler= cls_type,mode = mode_, task_set= tasks)
-    # part1 = "python3.7 evaluation.py"
-    # part2 = "--model_name_or_path result/my-sup-simcse-bert-base-uncased" +str(alpha)
-    # part3 = "--pooler cls_before_pooler"
-    # part4 = "--task_set sts"
-    # part5 = "--mode test"
-    # command = f"{part1} {part2} {part3} {part4} {part5}"
+    avg_score = last_eval(model_name_or_path=model_name, pooler= cls_type,mode = mode_, task_set=tasks)
+ 
     directory_path = training_args.output_dir
 
-    # Save all files in the directory to wandb
-    # if len(study.trials) > 0 and study.best_trial is not None:
-    #     if float(results["eval_stsb_spearman"]) > float(study.best_value):
-    #         wandb.save(os.path.join(directory_path, '*'))
-    # os.system(command)
+
     # wandb.save(os.path.join(directory_path, '*'))
-    wandb.log({'avg_score':avg_score})
+    # wandb.log({'avg_score':avg_score})
     return results["eval_stsb_spearman"]
 
 def _mp_fn(index):
@@ -638,7 +631,7 @@ def _mp_fn(index):
 
 if __name__ == "__main__":
     wandb_on = False
-    optuna_on = True
+    optuna_on = False
     if wandb_on:
         sweep_config = dict()
         sweep_config['method'] = 'grid'
@@ -647,11 +640,11 @@ if __name__ == "__main__":
         sweep_id = wandb.sweep(sweep_config, project = 'Adversarial_SimCSE')
         wandb.agent(sweep_id, main)
     elif optuna_on:
-        search_space = {'alpha':[0.1,0.3,0.5,0.7,0.9],'radius':[1,2,3], 'learning_rate':[3e-5]}
+        search_space = {'alpha': [0.00005, 0.00001, 0.000005, 0.000001, 0.0000005, 0.0000001],'radius':[1], 'learning_rate':[3e-5]}
         sampler=optuna.samplers.GridSampler(search_space)
-        study = optuna.create_study(study_name = 'roberta-various-radius3',storage="sqlite:///db.sqlite23",load_if_exists= True,
+        study = optuna.create_study(study_name = 'bert-unsup_grid_mse_rad1_smaller',storage="sqlite:///db.sqlite24",load_if_exists= True,
                                 direction ="maximize",sampler =sampler)
-        study.optimize(main, n_trials = 15)
+        study.optimize(main, n_trials = 6)
         # study = optuna.create_study(study_name = 'simcse_adv_wandb_13',storage="sqlite:///db.sqlite13",load_if_exists= True,
         #                         direction ="maximize")
     
