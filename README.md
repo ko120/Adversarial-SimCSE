@@ -41,9 +41,9 @@ At the end of the training, it automatically evaluate the training model with ST
 # Result Unsupervised V-AdvCSE
 | STS12 | STS13 | STS14 | STS15 | STS16 | STSBenchmark | SICKRelatedness |  Avg. |
 |-------|-------|-------|-------|-------|--------------|-----------------|-------|
-| 69.91 | 82.90 | 75.26 | 82.76 | 79.28 |    79.94     |      70.91      | 77.53 |
+| 70.86 | 83.60 | 75.41 | 83.26 | 79.64 |    80.02     |      72.98      | 77.53 |
 # Result Unsupervised SimCSE
-| STS12 | STS13 | STS14 | STS15 | STS16 | STSBenchmark | SICKRelatedness |  Avg. |
+| STS12 | STS13 | STS14 | STS15 | STS16 | STSBenchmark | SICKRelatedness |  Avg. | 
 |-------|-------|-------|-------|-------|--------------|-----------------|-------|
 | 68.40 | 82.41 | 74.38 | 80.91 | 78.56|    76.85      |      72.23      | 76.25 |
 
