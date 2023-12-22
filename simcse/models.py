@@ -38,21 +38,13 @@ def inf_norm(x):
     return torch.norm(x, p=float('inf'), dim=-1, keepdim=True)
 
 
-def stable_kl(logit, target, epsilon=1e-6, reduce=False):
-    logit = logit.view(-1, logit.size(-1)).float()
-    target = target.view(-1, target.size(-1)).float()
-    bs = logit.size(0)
-    p = F.log_softmax(logit, 1).exp()
-    y = F.log_softmax(target, 1).exp()
-    rp = -(1.0 / (p + epsilon) - 1 + epsilon).detach().log()
-    ry = -(1.0 / (y + epsilon) - 1 + epsilon).detach().log()
-    if reduce:
-        return (p * (rp - ry) * 2).sum() / bs
-    else:
-        return (p * (rp - ry) * 2).sum()
+def KL(input, target, reduction="batchmean"):
+    input = input.float()
+    target = target.float()
+    loss = F.kl_div(F.log_softmax(input, dim=-1, dtype=torch.float32), F.softmax(target, dim=-1, dtype=torch.float32), reduction=reduction)
+    return loss
 
-
-def sym_kl_loss(input, target, reduction='sum', alpha=1.0):
+def sym_kl_loss(input, target, reduction='batchmean', alpha=1.0):
 
   """input/target: logits"""
   input = input.float()
@@ -141,23 +133,22 @@ class SMARTLoss(nn.Module):
     
     def forward(self, embed: Tensor, state: Tensor, radius, step_size, reduction) -> Tensor:
         
-        noise = torch.randn_like(embed, requires_grad=True)
-        noise = _norm_grad(grad=noise, norm_type = "l2", radius = radius)
-   
+        noise = torch.randn_like(embed, requires_grad=True) * self.noise_var # noise variance added
+       
         # Indefinite loop with counter
         for i in count():
             # Compute perturbed embed and states
             embed_perturbed = embed + noise
             state_perturbed = self.eval_fn(embed_perturbed)
-         
-            if i == self.num_steps:
-                # return self.loss_last_fn(input = state , target = state_perturbed, reduction = reduction)
-                return self.loss_fn(state, state_perturbed)
             
+            if i == self.num_steps:
+                return self.loss_last_fn(state_perturbed, state)
+                # return self.loss_last_fn(F.log_softmax(state, dim=-1, dtype=torch.float32),F.softmax(state_perturbed, dim=-1, dtype=torch.float32))
             # loss = self.loss_fn(F.log_softmax(state, dim=-1, dtype=torch.float32),F.softmax(state_perturbed, dim=-1, dtype=torch.float32))
-            loss = self.loss_fn(state, state_perturbed) # try state.detach
+
+            loss = self.loss_fn(state_perturbed, state.detach()) 
             # Compute noise gradient ∂loss/∂noise
-            (noise_gradient,) = torch.autograd.grad(loss, noise, only_inputs=True, retain_graph=False,allow_unused=True)
+            (noise_gradient,) = torch.autograd.grad(loss, noise, only_inputs=True, retain_graph=False)
             norm = noise_gradient.norm()
             if torch.isnan(norm) or torch.isinf(norm):
                 return 0
@@ -166,10 +157,7 @@ class SMARTLoss(nn.Module):
             # Normalize new noise step into norm induced ball
             noise = _norm_grad(grad=noise, norm_type = "l2", radius = radius)
           
-            # noise = torch.clamp(noise, min = -self.epsilon)
-            # Reset noise gradients for next step
-            noise = noise.detach()
-            noise.requires_grad_()
+           
 
 
 class MLPLayer(nn.Module):
@@ -255,8 +243,9 @@ def cl_init(cls, config):
         cls.mlp = MLPLayer(config)
     cls.sim = Similarity(temp=cls.model_args.temp)
     cls.init_weights()
-    kl_loss = torch.nn.KLDivLoss(reduction = 'batchmean')
-    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = nn.MSELoss(), loss_last_fn= nn.MSELoss(),device= cls.device)
+    kl_loss = KL
+    mse_loss = torch.nn.MSELoss(reduction= 'mean')
+    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = kl_loss, loss_last_fn = sym_kl_loss, device= cls.device)
     
     
 def cl_forward(cls,
@@ -292,8 +281,8 @@ def cl_forward(cls,
     
     # extract second and third sent
     if num_sent == 2:
-        input_ids = input_ids[:,1,:]
-        attention_mask = attention_mask[:,1,:]
+        input_ids_sec = input_ids[:,1,:]
+        attention_mask_sec = attention_mask[:,1,:]
     else:
         input_ids = input_ids[:,1:,:]
         attention_mask = attention_mask[:,1:,:]
@@ -307,7 +296,7 @@ def cl_forward(cls,
     if token_type_ids is not None:
         first_token = token_type_ids[:,0,:]
         if num_sent == 2:
-            token_type_ids = token_type_ids[:,1,:]
+            token_type_ids_sec = token_type_ids[:,1,:]
         else:
             token_type_ids = token_type_ids[:,1:,:]
             token_type_ids = token_type_ids.reshape((-1, token_type_ids.size(-1))) # (bs * num_sent, len)
@@ -316,9 +305,9 @@ def cl_forward(cls,
 
     # Get raw embeddings
     outputs = encoder(
-        input_ids,
-        attention_mask=attention_mask,
-        token_type_ids=token_type_ids,
+        input_ids_sec,
+        attention_mask=attention_mask_sec,
+        token_type_ids=token_type_ids_sec,
         position_ids=position_ids,
         head_mask=head_mask,
         inputs_embeds=inputs_embeds,
@@ -341,7 +330,10 @@ def cl_forward(cls,
 
     # MLM auxiliary objective
     if mlm_input_ids is not None:
+       
         mlm_input_ids = mlm_input_ids.view((-1, mlm_input_ids.size(-1)))
+        attention_mask = attention_mask.view((-1, attention_mask.size(-1)))
+        token_type_ids = token_type_ids.view((-1, token_type_ids.size(-1)))
         mlm_outputs = encoder(
             mlm_input_ids,
             attention_mask=attention_mask,
@@ -420,21 +412,22 @@ def cl_forward(cls,
         cos_sim = cos_sim + weights
 
  
-    alpha = cls.model_args.alpha
+    adv_weight = cls.model_args.adv_weight
     radius = cls.model_args.radius
     reduction = cls.model_args.reduction
     step_size = cls.model_args.step_size
+
     
+    loss_cont = loss_fct(cos_sim, labels)
     z1_emb =first_output.last_hidden_state[:,0,:]
     loss_adv = cls.smart_loss(z1_emb,z1,radius,step_size,reduction)
-
-    loss_cont = loss_fct(cos_sim, labels)
-    loss = loss_cont + loss_adv*alpha
+    loss = loss_cont + loss_adv*adv_weight
 
 
 
     # Calculate loss for MLM
     if mlm_outputs is not None and mlm_labels is not None:
+
         mlm_labels = mlm_labels.view(-1, mlm_labels.size(-1))
         prediction_scores = cls.lm_head(mlm_outputs.last_hidden_state)
         masked_lm_loss = loss_fct(prediction_scores.view(-1, cls.config.vocab_size), mlm_labels.view(-1))
