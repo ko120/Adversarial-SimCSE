@@ -1,5 +1,8 @@
 import logging
 import os
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"] = "7"
+os.environ["WANDB_PROJECT"] = "adv_cse_symkl_wandb_paper_mlm" 
 import math
 import os
 import sys
@@ -258,21 +261,28 @@ def main(trial= None):
     if wandb_on:
         wandb.init()
         cfig = wandb.config
-        alpha = cfig.alpha
+        adv_weight = cfig.adv_weight
+        mlm_weight = cfig.mlm_weight
+        learning_rate = cfig.learning_rate
         radius = cfig.radius
+        reduction = "batchmean"
+        step_size = 1e-3
     elif optuna_on:
         wandb.init()
-        alpha = trial.suggest_categorical('alpha',[0.00005, 0.00001, 0.000005, 0.000001, 0.0000005, 0.0000001])
+        alpha = trial.suggest_categorical('alpha',[1e-4,2e-4,3e-4,4e-4,5e-4,6e-4,7e-4,1e-6,2e-6,3e-6,4e-6,5e-6,6e-6,7e-6,1e-7,2e-7,3e-7,4e-7,5e-7,6e-7,7e-7,8e-7,1e-8])
+        # alpha = trial.suggest_float('alpha',1e-8,1e-1,log=True)
         radius = trial.suggest_categorical('radius',[1])
         step_size = trial.suggest_categorical('step_size',[1e-3])
-        learning_rate =  trial.suggest_categorical('learning_rate',[3e-5])
-        reduction = "sum"
+        learning_rate =  trial.suggest_categorical('learning_rate',[7e-6,1e-5,3e-5])
+        reduction = "batchmean"
     else:
-        alpha = 0.0001
+        wandb.init(name = "both jsl with paper ith init norm with mlm")
+        alpha =  5e-7
         radius = 1
         step_size = 1e-3
-        reduction = "sum"
+        reduction = "batchmean"
         learning_rate = 3e-5
+        mlm_weight = 0.1
 
     
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, OurTrainingArguments))
@@ -567,11 +577,12 @@ def main(trial= None):
         tokenizer=tokenizer,
         data_collator=data_collator,
     )
-    model_args.alpha = alpha
+    model_args.adv_weight = adv_weight
     model_args.radius = radius
     model_args.step_size = step_size
     model_args.reduction = reduction
-
+    model_args.mlm_weight = mlm_weight
+    wandb.log({'adv_weight':adv_weight,'mlm_weight': mlm_weight ,'lr':learning_rate})
     trainer.model_args = model_args
 
     # Training
@@ -619,9 +630,8 @@ def main(trial= None):
  
     directory_path = training_args.output_dir
 
-
     # wandb.save(os.path.join(directory_path, '*'))
-    # wandb.log({'avg_score':avg_score})
+    wandb.log({'avg_score':avg_score})
     return results["eval_stsb_spearman"]
 
 def _mp_fn(index):
@@ -630,25 +640,26 @@ def _mp_fn(index):
 
 
 if __name__ == "__main__":
-    wandb_on = False
+    wandb_on = True
     optuna_on = False
     if wandb_on:
         sweep_config = dict()
         sweep_config['method'] = 'grid'
-        sweep_config['metric'] = {'name': 'test_accuracy', 'goal': 'maximize'}
-        sweep_config['parameters'] = {'alpha' : {'values' : [0.5]}, 'K_iter':{'values':[1]}, 'radius':{'values':[5]}}
-        sweep_id = wandb.sweep(sweep_config, project = 'Adversarial_SimCSE')
-        wandb.agent(sweep_id, main)
+        sweep_config['metric'] = {'name': 'avg_score', 'goal': 'maximize'}
+        sweep_config['parameters'] = {'mlm_weight' : {'values' : [0.1,0.05,1e-2,5e-3,1e-3,5e-4,1e-4,5e-5,1e-5,5e-6,1e-6,5e-7,1e-7]},
+                                      'adv_weight' : {'values': [0.1,0.05,1e-2,5e-3,1e-3,5e-4,1e-4,5e-5,1e-5,5e-6,1e-6,5e-7,1e-7]},
+                                       'learning_rate':{'values':[3e-5]},'radius':{'values':[1]}}
+        # sweep_id = wandb.sweep(sweep_config)
+        wandb.agent("654s48ga", main)
     elif optuna_on:
-        search_space = {'alpha': [0.00005, 0.00001, 0.000005, 0.000001, 0.0000005, 0.0000001],'radius':[1], 'learning_rate':[3e-5]}
+        search_space = {'alpha': [0.1,0.05,1e-2,5e-3,1e-3,5e-4,1e-4,5e-5,1e-5,5e-6,1e-6,5e-7,1e-7,5e-8,1e-8],'radius':[1,5,10,15,20], 
+                        'learning_rate':[7e-6,1e-5,3e-5]}
         sampler=optuna.samplers.GridSampler(search_space)
-        study = optuna.create_study(study_name = 'bert-unsup_grid_mse_rad1_smaller',storage="sqlite:///db.sqlite24",load_if_exists= True,
-                                direction ="maximize",sampler =sampler)
-        study.optimize(main, n_trials = 6)
-        # study = optuna.create_study(study_name = 'simcse_adv_wandb_13',storage="sqlite:///db.sqlite13",load_if_exists= True,
-        #                         direction ="maximize")
+        study = optuna.create_study(study_name = 'bert-unsup_grid_jskl',storage="sqlite:///db.sqlite27",load_if_exists= True,
+                                direction ="maximize",sampler = sampler)
+        study.optimize(main, n_trials = 100)
+        
     
-        # study.optimize(main, n_trials = 100)
         trials = study.best_trial
         print("value: ", trials.value)
         print("parmas :")
