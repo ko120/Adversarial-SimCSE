@@ -1,7 +1,5 @@
 import logging
 import os
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "7"
 os.environ["WANDB_PROJECT"] = "adv_cse_symkl_wandb_paper_mlm" 
 import math
 import os
