@@ -275,7 +275,7 @@ def main(trial= None):
         reduction = "batchmean"
     else:
         wandb.init(name = "both jsl with paper ith init norm with mlm")
-        alpha =  5e-7
+        adv_weight =  5e-7
         radius = 1
         step_size = 1e-3
         reduction = "batchmean"
