@@ -644,11 +644,11 @@ if __name__ == "__main__":
         sweep_config = dict()
         sweep_config['method'] = 'grid'
         sweep_config['metric'] = {'name': 'avg_score', 'goal': 'maximize'}
-        sweep_config['parameters'] = {'mlm_weight' : {'values' : [0.1,0.05,1e-2,5e-3,1e-3,5e-4,1e-4,5e-5,1e-5,5e-6,1e-6,5e-7,1e-7]},
+        sweep_config['parameters'] = {'mlm_weight' : {'values' : [0]},
                                       'adv_weight' : {'values': [0.1,0.05,1e-2,5e-3,1e-3,5e-4,1e-4,5e-5,1e-5,5e-6,1e-6,5e-7,1e-7]},
                                        'learning_rate':{'values':[3e-5]},'radius':{'values':[1]}}
-        # sweep_id = wandb.sweep(sweep_config)
-        wandb.agent("654s48ga", main)
+        sweep_id = wandb.sweep(sweep_config)
+        wandb.agent(sweep_id, main)
     elif optuna_on:
         search_space = {'alpha': [0.1,0.05,1e-2,5e-3,1e-3,5e-4,1e-4,5e-5,1e-5,5e-6,1e-6,5e-7,1e-7,5e-8,1e-8],'radius':[1,5,10,15,20], 
                         'learning_rate':[7e-6,1e-5,3e-5]}
