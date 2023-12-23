@@ -134,7 +134,9 @@ class SMARTLoss(nn.Module):
     def forward(self, embed: Tensor, state: Tensor, radius, step_size, reduction) -> Tensor:
         
         noise = torch.randn_like(embed, requires_grad=True) * self.noise_var # noise variance added
-       
+        noise = _norm_grad(grad= noise, norm_type = "l2", radius = radius)
+
+        
         # Indefinite loop with counter
         for i in count():
             # Compute perturbed embed and states
