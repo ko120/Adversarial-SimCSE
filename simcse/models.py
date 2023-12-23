@@ -136,7 +136,6 @@ class SMARTLoss(nn.Module):
         noise = torch.randn_like(embed, requires_grad=True) * self.noise_var # noise variance added
         noise = _norm_grad(grad= noise, norm_type = "l2", radius = radius)
 
-        
         # Indefinite loop with counter
         for i in count():
             # Compute perturbed embed and states
@@ -148,7 +147,7 @@ class SMARTLoss(nn.Module):
                 # return self.loss_last_fn(F.log_softmax(state, dim=-1, dtype=torch.float32),F.softmax(state_perturbed, dim=-1, dtype=torch.float32))
             # loss = self.loss_fn(F.log_softmax(state, dim=-1, dtype=torch.float32),F.softmax(state_perturbed, dim=-1, dtype=torch.float32))
 
-            loss = self.loss_fn(state_perturbed, state.detach()) 
+            loss = self.loss_fn(state_perturbed, state) 
             # Compute noise gradient ∂loss/∂noise
             (noise_gradient,) = torch.autograd.grad(loss, noise, only_inputs=True, retain_graph=False)
             norm = noise_gradient.norm()
