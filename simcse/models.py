@@ -67,10 +67,8 @@ def _norm_grad(grad, norm_type, radius = None):
 
     if norm_p == "l2":
         init_norm = torch.norm(grad, dim=-1, keepdim=True)
-        if (init_norm > radius).any():
-            direction = (grad * radius) / (init_norm + epsilon)
-        else:
-          direction = grad
+        direction = (grad * radius) / (init_norm + epsilon)
+        
     elif norm_p == "l1":
         direction = grad.sign()
     else:
