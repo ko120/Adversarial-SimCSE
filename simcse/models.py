@@ -131,7 +131,7 @@ class SMARTLoss(nn.Module):
     
     def forward(self, embed: Tensor, state: Tensor, radius, step_size, reduction) -> Tensor:
         
-        noise = torch.randn_like(embed, requires_grad=True) 
+        noise = torch.randn_like(embed, requires_grad=True) * self.noise_var
         noise = _norm_grad(grad= noise, norm_type = "l2", radius = radius)
 
         # Indefinite loop with counter
@@ -244,7 +244,7 @@ def cl_init(cls, config):
     cls.init_weights()
     kl_loss = KL
     mse_loss = torch.nn.MSELoss(reduction= 'mean')
-    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = kl_loss, loss_last_fn = sym_kl_loss, device= cls.device)
+    cls.smart_loss = SMARTLoss(eval_fn= cls.mlp,loss_fn = kl_loss, loss_last_fn = js_loss, device= cls.device)
     
     
 def cl_forward(cls,
@@ -274,7 +274,7 @@ def cl_forward(cls,
     
     mlm_outputs = None
     # extract first sent
-
+    
     first_sentence_input_ids = input_ids[:, 0, :]
     first_sentence_attention_mask = attention_mask[:, 0, :]
     
@@ -346,7 +346,7 @@ def cl_forward(cls,
         )
 
     # Pooling
-    pooler_output = cls.pooler(attention_mask, outputs)
+    pooler_output = cls.pooler(attention_mask_sec, outputs)
     first_pooled = cls.pooler(first_sentence_attention_mask, first_output)
     if num_sent == 3:
         pooler_output = pooler_output.view((batch_size, num_sent, pooler_output.size(-1))) # (bs, num_sent, hidden)
